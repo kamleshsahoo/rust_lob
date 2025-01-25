@@ -1,0 +1,15 @@
+[package]
+name = "backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rust_decimal = "1.36"
+rand = "0.8.4"
+rand_distr = "0.4.3"
+axum = { version = "0.8.1", features = ["ws"]}
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.137"
+chrono = { version = "0.4.39", features = ["serde"]}
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros", "time"]}
+futures-util = "0.3.31"
