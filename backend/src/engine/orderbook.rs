@@ -115,25 +115,110 @@ pub struct Arena {
   pub orders: HashMap<u64, Order>,
   limit_orders: HashSet<u64>,
   executed_orders: Vec<ExecutedOrders>,
-  executed_orders_offset: usize, // tracks the last sent update to the server
 
   pub highest_buy: Option<Decimal>,
   pub lowest_sell: Option<Decimal>,
   buy_tree: Option<Decimal>,
   sell_tree: Option<Decimal>,
-  pub executed_orders_count: u64,
+  pub executed_orders_count: usize,
   pub avl_rebalances: u64,
+  show_best_price_levels: bool
 }
 
 impl Arena {
-  pub fn new() -> Self {
-    Arena {buy_limits: HashMap::new(), sell_limits: HashMap::new(), orders: HashMap::new(), limit_orders: HashSet::new(), executed_orders: Vec::new(), highest_buy: None, lowest_sell: None, buy_tree: None, sell_tree: None, executed_orders_count: 0 , executed_orders_offset: 0, avl_rebalances: 0}
+  pub fn new(best_price_lvls: bool) -> Self {
+    Arena {buy_limits: HashMap::new(), sell_limits: HashMap::new(), orders: HashMap::new(), limit_orders: HashSet::new(), executed_orders: Vec::new(), highest_buy: None, lowest_sell: None, buy_tree: None, sell_tree: None, executed_orders_count: 0, avl_rebalances: 0, show_best_price_levels: best_price_lvls} 
   }
 
-  pub fn get_executed_orders(&mut self) -> Vec<ExecutedOrders> {
-    let fresh_trades = &self.executed_orders[self.executed_orders_offset..];
-    self.executed_orders_offset = self.executed_orders.len(); // update the offset
-    fresh_trades.to_vec()
+  pub fn get_executed_orders(&mut self, offset: &mut usize) -> Option<Vec<ExecutedOrders>> {
+    let mut fresh_trades = None;
+    if self.executed_orders_count > 0 && *offset != self.executed_orders_count {
+      let trades = &self.executed_orders[*offset..];
+      *offset = self.executed_orders.len(); // update the offset
+      fresh_trades = Some(trades.to_vec());
+
+    }
+    fresh_trades
+  }
+
+  pub fn get_top_n_bids(&self, n: usize) -> Vec<(Decimal, u64)> {
+    let mut best_bids: Vec<(Decimal, u64)> = Vec::new();
+    
+    if self.show_best_price_levels {
+      if let Some(max_bid) = self.highest_buy {
+        self.collect_n_bids(max_bid, n, &mut best_bids);
+        // println!("highest buy limit: {:?}", self.buy_limits.get(&max_bid).unwrap());
+      }
+    } else {
+      if let Some(buy_root) = self.buy_tree {
+        self.collect_n_bids(buy_root, n, &mut best_bids);
+      }
+    }
+    // println!("best bids length: {:?}", best_bids.len());
+    best_bids
+  }
+
+  pub fn get_top_n_asks(&self, n: usize) -> Vec<(Decimal, u64)> {
+    let mut best_asks: Vec<(Decimal, u64)> = Vec::new();
+
+    if self.show_best_price_levels {
+      if let Some(min_ask) = self.lowest_sell {
+        self.collect_n_asks(min_ask, n, &mut best_asks);
+        // println!("lowest sell limit: {:?}", self.sell_limits.get(&min_ask).unwrap());
+      }
+    } else {
+      if let Some(sell_root) = self.sell_tree {
+        self.collect_n_asks(sell_root, n, &mut best_asks);
+      }   
+    }
+    // println!("best asks length: {:?}", best_asks.len());
+    best_asks
+  }
+
+  fn collect_n_bids(&self, price: Decimal, n: usize, best_bids: &mut Vec<(Decimal, u64)>) {
+    
+    if best_bids.len() >= n {
+      return;
+    }
+
+    if let Some(limit) = self.buy_limits.get(&price) {
+      // traverse right subtree first (higher prices)
+      if let Some(right_child) = limit.right_child {
+        self.collect_n_bids(right_child, n, best_bids);
+      }
+
+      if best_bids.len() < n {
+        best_bids.push((price, limit.total_volume));
+      }
+
+      // Traverse left subtree (lower prices)
+      if let Some(left_child) = limit.left_child {
+        self.collect_n_bids(left_child, n, best_bids);
+      }
+    }
+  }
+
+  fn collect_n_asks(&self, price: Decimal, n: usize, best_asks: &mut Vec<(Decimal, u64)>) {
+    
+    if best_asks.len() >= n {
+      return;
+    }
+
+    if let Some(limit) = self.sell_limits.get(&price) {
+      // Traverse left subtree first (lower prices)
+      if let Some(left_child) = limit.left_child {
+        self.collect_n_asks(left_child, n, best_asks);
+      }
+
+      if best_asks.len() < n {
+        best_asks.push((price, limit.total_volume));
+      }
+
+      // traverse right subtree (higher prices)
+      if let Some(right_child) = limit.right_child {
+        self.collect_n_asks(right_child, n, best_asks);
+      }
+    }
   }
 
   pub fn get_random_order_id(&self) -> Option<&u64> {
@@ -254,6 +339,7 @@ impl Arena {
     }
   }
 
+  /*TODO: Check if can be removed
   fn handle_empty_book_edge(book_edge: &mut Option<Decimal>, limit_map: &mut HashMap<Decimal, Limit>, tree: &mut Option<Decimal>) -> Limit {
     
     let book_edge_price = book_edge.unwrap();
@@ -307,6 +393,7 @@ impl Arena {
 
     book_edge_limit
   }
+  */
 
   pub fn add_limit_order(&mut self, order_id: u64, bid_or_ask: BidOrAsk, mut shares: u64, limit_price: Decimal) {
     
