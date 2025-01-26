@@ -1,11 +1,13 @@
-use std::{cmp::Reverse, collections::BinaryHeap, str::FromStr, time::{Duration, Instant}};
-use chrono::{DateTime, Utc};
-use rand::{rngs::ThreadRng, thread_rng};
+use std::{str::FromStr, time::Instant};
+// use chrono::{DateTime, Utc};
+use rand::{rngs::StdRng, SeedableRng};
 use rand_distr::{Bernoulli, Distribution, Normal, Uniform};
 use rust_decimal::{prelude::ToPrimitive, Decimal};
+use serde::Serialize;
 
 use crate::engine::orderbook::{Arena, BidOrAsk, ExecutedOrders};
 
+/* TODO: May Remove
 struct RateLimiter {
   last_update: Instant,
   update_interval: Duration
@@ -26,7 +28,9 @@ impl RateLimiter {
     }
   }
 }
+*/
 
+/*TODO: remove at end
 #[derive(Debug)]
 enum OrderType {
   Add,
@@ -34,37 +38,42 @@ enum OrderType {
   Delete,
 }
 
-// #[derive(Debug)]
-// struct ObDelta {
-//   order_type: OrderType,
-//   id: u64,
-//   side: BidOrAsk,
-//   price: Decimal,
-//   qty: u64,
-//   timestamp: DateTime<Utc>
-// }
-
 #[derive(Debug)]
-enum ServerMessage {
+struct ObDelta {
+  order_type: OrderType,
+  id: u64,
+  side: BidOrAsk,
+  price: Decimal,
+  qty: u64,
+  timestamp: DateTime<Utc>
+}
+*/
+
+#[derive(Debug, Serialize)]
+// #[serde(tag = "type")]
+pub enum ServerMessage {
   PriceLevels { bids: Vec<(Decimal, u64)>, asks: Vec<(Decimal, u64)> },
-  Trades(Vec<ExecutedOrders>),
-  EngineStats(Vec<ExecutionStats>)
+  Trades (Vec<ExecutedOrders>),
+  // EngineStats(Vec<EngineStats>)
+  ExecutionStats (EngineStats)
 }
 
-#[derive(Debug, Clone)]
-struct ExecutionStats {
+#[derive(Debug, Serialize, Clone)]
+pub struct EngineStats {
   order_type: String,
   latency: u128,
   avl_rebalances: u64,
-  executed_orders_cnt: u64
+  executed_orders_cnt: usize
 }
 
 pub struct Simulator {
   // symbol: String,
   // sequence_number: u64,
   book : Arena,
-  execution_stats: Vec<ExecutionStats>,
-  rng: ThreadRng,
+  engine_stats: Vec<EngineStats>,
+  //pub engine_stats_offset: usize, // tracks the last sent update to the server
+  //rng: ThreadRng,
+  rng: StdRng,
   order_id: u64,
   mean_limit_price: f64,
   sd_limit_price: f64,
@@ -73,20 +82,20 @@ pub struct Simulator {
   price_dist: Normal<f64>,
   qty_dist: Uniform<u64>,
   side_dist: Bernoulli,
-  price_levels_rate_limiter: RateLimiter,
-  executed_orders_rate_limiter: RateLimiter,
-  engine_stats_rate_limiter: RateLimiter
+  executed_orders_offset: usize,
 }
 
 impl Simulator {
-  pub fn new(mean_price: f64, sd_price: f64) -> Self {
+  pub fn new(mean_price: f64, sd_price: f64, best_price_lvls: bool) -> Self {
     //TODO: could take indvidual these probs as input
     let action_probs = vec![0.0, 0.4, 0.6]; // ADD, CANCEL, MODIFY
 
     Simulator {
-      book: Arena::new(),
-      execution_stats: Vec::new(),
-      rng: thread_rng(),
+      book: Arena::new(best_price_lvls),
+      engine_stats: Vec::new(),
+      //engine_stats_offset: 0,
+      //rng: thread_rng(),
+      rng: StdRng::from_entropy(),
       order_id: 1,
       mean_limit_price: mean_price,
       sd_limit_price: sd_price,
@@ -98,17 +107,12 @@ impl Simulator {
       price_dist: Normal::new(mean_price, sd_price).expect("error creating a normal distribution"),
       qty_dist: Uniform::new(1, 1000),
       side_dist: Bernoulli::new(0.5).expect("error creating bernoulii distr"),
-      price_levels_rate_limiter: RateLimiter::new(Duration::from_millis(100)),
-      executed_orders_rate_limiter: RateLimiter::new(Duration::from_millis(500)),
-      engine_stats_rate_limiter: RateLimiter::new(Duration::from_millis(100))
+      executed_orders_offset: 0,
     }
   }
 
-  fn sample_price_levels(&self) {
-    todo!()
-  }
-
-  fn add_limit(&mut self) {
+  fn create_add_limit(&mut self) {
+    println!("**ADD");
     let shares = self.qty_dist.sample(&mut self.rng);
     let side = self.side_dist.sample(&mut self.rng);
 
@@ -141,30 +145,30 @@ impl Simulator {
     let start = Instant::now();
     self.book.add_limit_order(self.order_id, bid_or_ask, shares, Decimal::from_str(&price_string).expect("parsing price string to decimal failed"));
     let duration = start.elapsed().as_nanos();
-    self.execution_stats.push(ExecutionStats { order_type: String::from("ADD"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
+    self.engine_stats.push(EngineStats { order_type: String::from("ADD"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
     
     self.order_id += 1;
   }
 
-  fn cancel_limit(&mut self) {
+  fn create_cancel_limit(&mut self) {
     match self.book.get_random_order_id() {
-      None => self.add_limit(),
+      None => self.create_add_limit(),
       Some(order_id) => {
         let start = Instant::now();
         self.book.cancel_limit_order(*order_id);
         let duration = start.elapsed().as_nanos();
-        self.execution_stats.push(ExecutionStats { order_type: String::from("CANCEL"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
+        self.engine_stats.push(EngineStats { order_type: String::from("CANCEL"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
       }
     }
   }
 
-  fn modify_limit(&mut self) {
+  fn create_modify_limit(&mut self) {
     //TODO: highest buy checks req or not as we pre-seed
     let highest_buy = self.book.highest_buy.unwrap().to_f64().unwrap();
     let price_distr = Normal::new(highest_buy, self.sd_limit_price).expect("error creating a normal dist for modify limit!");
 
     match self.book.get_random_order_id() {
-      None => self.add_limit(),
+      None => self.create_add_limit(),
       Some(order_id) => {
         let order = self.book.orders.get(order_id).expect("order should exist after the checks!");
         let shares = self.qty_dist.sample(&mut self.rng);
@@ -193,7 +197,7 @@ impl Simulator {
         let start = Instant::now();
         self.book.modify_limit_order(*order_id, shares, Decimal::from_str(&price_string).expect("parsing price string to decimal failed"));
         let duration = start.elapsed().as_nanos();
-        self.execution_stats.push(ExecutionStats { order_type: String::from("MODIFY"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
+        self.engine_stats.push(EngineStats { order_type: String::from("MODIFY"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
       }
     }
   }
@@ -213,22 +217,28 @@ impl Simulator {
     self.order_id = n+1;
   }
 
-  fn generate_orders(&mut self) {
-    
+  pub fn generate_orders(&mut self) {
     
     let rand_num = self.order_type_dist.sample(&mut self.rng);
 
     match self.order_type_cuml_probs.iter().position(|cumprob| rand_num <= *cumprob).expect("error getting order type idx!") {
-      0 => self.add_limit(),
-      1 => self.cancel_limit(),
-      2 => self.modify_limit(),
+      0 => {
+        println!("inserting ADD with order id: {:?}", self.order_id);
+        self.create_add_limit()
+      },
+      1 => {
+        println!("CANCEL trigg. current order id: {:?}", self.order_id);
+        self.create_cancel_limit()},
+      2 => {
+        println!("MODIFY trigg. curr order id: {:?}", self.order_id);
+        self.create_modify_limit()
+      },
       _ => panic!("error choosing a order type in generate_orders()!")
     };
   } 
 
+  /*TODO: Remove this
   fn create_price_levels(&self, n_level: usize) -> ServerMessage {
-    //TODO: check if we can make this efficient
-
     // Sorted highest to lowest buy, i.e descending
     let bid_levels = self.book.buy_limits.iter()
                                                       .map(|(&k,v)| (k, v.total_volume))
@@ -250,32 +260,55 @@ impl Simulator {
     
     ServerMessage::PriceLevels { bids: bid_levels, asks: ask_levels }
   }
+  */
 
+  /*NOTE: may remove this ver
   pub fn generate_updates(&mut self) -> Vec<ServerMessage>{
     
     let mut messages = Vec::new();
-
-    // generate and process the orders
-    self.generate_orders();
-
     // sending top `n` price levels 
+    //TODO: check if we can make this efficient
     if self.price_levels_rate_limiter.should_update() {
       let price_levels = self.create_price_levels(25);
       messages.push(price_levels);
     }
 
-    //TODO: this needs to be sent everytime, keep track of which order stats were sent last time
+    //TODO: the vec can be empty. need to handle here?
     if self.engine_stats_rate_limiter.should_update() {
-      let engine_stats = self.execution_stats.clone();
+      let engine_stats = self.get_engine_stats();
       messages.push(ServerMessage::EngineStats(engine_stats));
     }
 
-    //TODO: here too keep track of which trades were sent last time
+    //TODO: the vec can be empty. need to handle here?
     if self.executed_orders_rate_limiter.should_update() {
-      let executed_orders = self.book.executed_orders.clone();
-      if !executed_orders.is_empty() {
-        messages.push(ServerMessage::Trades(executed_orders));
-      }
+      let executed_orders = self.book.get_executed_orders();
+      messages.push(ServerMessage::Trades(executed_orders));
+      // if !executed_orders.is_empty() {
+      //   messages.push(ServerMessage::Trades(executed_orders));
+      // }
+    }
+
+    messages
+  }
+  */
+
+  pub fn generate_updates(&mut self, idx: usize) -> Vec<ServerMessage>{
+    
+    let mut messages = Vec::new();
+
+    // sending top `n=25` price levels 
+    // NOTE: bids or asks may be empty vectors
+    if idx%100 == 0 {
+      let price_levels = ServerMessage::PriceLevels { bids: self.book.get_top_n_bids(25), asks: (self.book.get_top_n_asks(25)) }; 
+      messages.push(price_levels);
+    }
+
+    // we always send the engine stats
+    let engine_stat = self.engine_stats.get(idx).expect("each order should have a execution stat!").clone();
+    messages.push(ServerMessage::ExecutionStats(engine_stat));
+
+    if let Some(trades) = self.book.get_executed_orders(&mut self.executed_orders_offset) {
+      messages.push(ServerMessage::Trades(trades));
     }
 
     messages
