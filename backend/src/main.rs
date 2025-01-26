@@ -1,17 +1,12 @@
 mod order_generator;
 mod engine;
 
-// use std::{cmp::Ordering, collections::HashMap, time::Instant};
-// use rand::thread_rng;
-// use rand_distr::{Distribution, Uniform, WeightedIndex};
-
 use std::{net::SocketAddr, ops::ControlFlow, time::Duration};
-
 use axum::{extract::{ws::{Message, WebSocket}, ConnectInfo, WebSocketUpgrade}, response::IntoResponse, routing::any, Router};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use order_generator::gen::Simulator;
 use serde::Deserialize;
-use tokio::{net::TcpListener, time};
+use tokio::{net::TcpListener, sync::mpsc::{self, Sender}, time};
 
 
 /*
@@ -93,6 +88,7 @@ enum ClientMessage {
       throttle_nanos: Option<u64>, // Optional, defaults to 1000ns
       mean_price: Option<f64>,  // Optional, defaults to 300.0
       sd_price: Option<f64>,  // Optional, defaults to 50.0
+      best_price_levels: Option<bool> // whether to show best bids and asks, defaults to false
   },
   Stop,
 }
@@ -132,45 +128,72 @@ async fn handler (ws: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<SocketAdd
   ws.on_upgrade(move|socket| handle_socket(socket, addr))
 }
 
-async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
-  
+async fn handle_socket(socket: WebSocket, who: SocketAddr) {
+
   let (mut sender, mut receiver) = socket.split();
+  //TODO: check if unbounded channel can be used
+  let (tx, mut rx) = mpsc::channel(1_000_000);
 
-  let mut send_task = tokio::spawn(future);
-
-  let mut recv_task = tokio::spawn(async move {
-    let mut cnt = 0;
-    while let Some(Ok(msg)) = receiver.next().await {
-      if process_message(msg, who).is_break() {
+  let mut send_task = tokio::spawn(async move {
+    while let Some(msg) = rx.recv().await {
+      // sending to the Client
+      if sender.send(msg).await.is_err() {
         break;
       }
     }
-    cnt
   });
+
+  let mut recv_task = tokio::spawn(async move {
+    //let mut cnt = 0;
+    while let Some(Ok(client_msg)) = receiver.next().await {
+      if process_message(client_msg, who, tx.clone()).await.is_break() {
+        break;
+      }
+    }
+    //cnt
+  });
+
+  tokio::select! {
+    _send = &mut send_task => recv_task.abort(),
+    _rcv = &mut recv_task => send_task.abort(),
+  }
+
+  println!("Websocket context {} destroyed", who);
 }
 
-fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+async fn process_message(msg: Message, who: SocketAddr, tx: Sender<Message> ) -> ControlFlow<(), ()> {
   match msg {
     Message::Text(t) => {
       println!(">>> {} sent string: {:?}", who, t);
       let client_msg = serde_json::from_str::<ClientMessage>(t.as_str());
       match client_msg {
-        Ok(ClientMessage::Start { total_objects, throttle_nanos, mean_price, sd_price }) => {
+        Ok(ClientMessage::Start { total_objects, throttle_nanos, mean_price, sd_price , best_price_levels }) => {
           
+          println!("client payload\ntotal objects: {:?} nanos: {:?} mean: {:?} sd: {:?} show best price levels: {:?}", total_objects, throttle_nanos, mean_price, sd_price, best_price_levels);
+
           let (throttle, num_orders) = (throttle_nanos.unwrap_or(1_000_000_000), total_objects.unwrap_or(10));
           let (mean, sd) = (mean_price.unwrap_or(300.0), sd_price.unwrap_or(50.0));
 
-          let mut simulator = Simulator::new(mean, sd);
+          let mut simulator = Simulator::new(mean, sd, best_price_levels.unwrap_or(false));
+          //TODO: see if we need to add throttling
           let mut interval = time::interval(Duration::from_nanos(throttle));
 
           // seed the orderbook with 10k ADD limit orders
           simulator.seed_orderbook(10_000);
 
           println!("[INFO] Starting simulation");
-          for _ in 0..num_orders {
-            let updates = simulator.generate_updates();
-          }
+          for idx in 0..num_orders {
 
+            // generate and process the orders
+            simulator.generate_orders();
+            let updates = simulator.generate_updates(idx);
+            let msg = Message::text(serde_json::to_string(&updates).expect("serializing server updates failed!"));
+            if tx.send(msg).await.is_err() {
+              println!("receiver half of channel dropped!");
+              break;
+            };
+          }
+          // println!("engine stats: {:?}\nengine stats offset: {:?}", simulator.engine_stats, simulator.engine_stats_offset);
         },
         Ok(ClientMessage::Stop) => {
           println!(">>> {} requested STOP", who);
