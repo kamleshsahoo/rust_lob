@@ -30,29 +30,10 @@ impl RateLimiter {
 }
 */
 
-/*TODO: remove at end
-#[derive(Debug)]
-enum OrderType {
-  Add,
-  Update,
-  Delete,
-}
-
-#[derive(Debug)]
-struct ObDelta {
-  order_type: OrderType,
-  id: u64,
-  side: BidOrAsk,
-  price: Decimal,
-  qty: u64,
-  timestamp: DateTime<Utc>
-}
-*/
-
 #[derive(Debug, Serialize)]
 // #[serde(tag = "type")]
 pub enum ServerMessage {
-  PriceLevels { bids: Vec<(Decimal, u64)>, asks: Vec<(Decimal, u64)> },
+  PriceLevels { snapshot: bool, bids: Vec<(Decimal, u64)>, asks: Vec<(Decimal, u64)> },
   Trades (Vec<ExecutedOrders>),
   // EngineStats(Vec<EngineStats>)
   ExecutionStats (EngineStats)
@@ -71,8 +52,6 @@ pub struct Simulator {
   // sequence_number: u64,
   book : Arena,
   engine_stats: Vec<EngineStats>,
-  //pub engine_stats_offset: usize, // tracks the last sent update to the server
-  //rng: ThreadRng,
   rng: StdRng,
   order_id: u64,
   mean_limit_price: f64,
@@ -112,7 +91,7 @@ impl Simulator {
   }
 
   fn create_add_limit(&mut self) {
-    println!("**ADD");
+    //println!("**ADD");
     let shares = self.qty_dist.sample(&mut self.rng);
     let side = self.side_dist.sample(&mut self.rng);
 
@@ -223,83 +202,32 @@ impl Simulator {
 
     match self.order_type_cuml_probs.iter().position(|cumprob| rand_num <= *cumprob).expect("error getting order type idx!") {
       0 => {
-        println!("inserting ADD with order id: {:?}", self.order_id);
+        //println!("inserting ADD with order id: {:?}", self.order_id);
         self.create_add_limit()
       },
       1 => {
-        println!("CANCEL trigg. current order id: {:?}", self.order_id);
+        //println!("CANCEL trigg. current order id: {:?}", self.order_id);
         self.create_cancel_limit()},
       2 => {
-        println!("MODIFY trigg. curr order id: {:?}", self.order_id);
+        //println!("MODIFY trigg. curr order id: {:?}", self.order_id);
         self.create_modify_limit()
       },
       _ => panic!("error choosing a order type in generate_orders()!")
     };
   } 
 
-  /*TODO: Remove this
-  fn create_price_levels(&self, n_level: usize) -> ServerMessage {
-    // Sorted highest to lowest buy, i.e descending
-    let bid_levels = self.book.buy_limits.iter()
-                                                      .map(|(&k,v)| (k, v.total_volume))
-                                                      .map(Reverse)
-                                                      .collect::<BinaryHeap<_>>()
-                                                      .into_sorted_vec()
-                                                      .into_iter()
-                                                      .take(n_level)
-                                                      .map(|Reverse((k,v))| (k,v))
-                                                      .collect::<Vec<_>>();
-    // Sorted lowest to highest sell, i.e ascending
-    let ask_levels = self.book.sell_limits.iter()
-                                                      .map(|(&k,v)| (k, v.total_volume))
-                                                      .collect::<BinaryHeap<_>>()
-                                                      .into_sorted_vec()
-                                                      .into_iter()
-                                                      .take(n_level)
-                                                      .collect::<Vec<_>>();
-    
-    ServerMessage::PriceLevels { bids: bid_levels, asks: ask_levels }
+  pub fn get_snapshot(&self) -> Vec<ServerMessage> {
+    vec![ServerMessage::PriceLevels { snapshot: true, bids: self.book.get_top_n_bids(25), asks: (self.book.get_top_n_asks(25)) }]
   }
-  */
-
-  /*NOTE: may remove this ver
-  pub fn generate_updates(&mut self) -> Vec<ServerMessage>{
-    
-    let mut messages = Vec::new();
-    // sending top `n` price levels 
-    //TODO: check if we can make this efficient
-    if self.price_levels_rate_limiter.should_update() {
-      let price_levels = self.create_price_levels(25);
-      messages.push(price_levels);
-    }
-
-    //TODO: the vec can be empty. need to handle here?
-    if self.engine_stats_rate_limiter.should_update() {
-      let engine_stats = self.get_engine_stats();
-      messages.push(ServerMessage::EngineStats(engine_stats));
-    }
-
-    //TODO: the vec can be empty. need to handle here?
-    if self.executed_orders_rate_limiter.should_update() {
-      let executed_orders = self.book.get_executed_orders();
-      messages.push(ServerMessage::Trades(executed_orders));
-      // if !executed_orders.is_empty() {
-      //   messages.push(ServerMessage::Trades(executed_orders));
-      // }
-    }
-
-    messages
-  }
-  */
-
+  
   pub fn generate_updates(&mut self, idx: usize) -> Vec<ServerMessage>{
     
     let mut messages = Vec::new();
 
-    // sending top `n=25` price levels 
+    // sending top `n=100` price levels 
     // NOTE: bids or asks may be empty vectors
-    if idx%100 == 0 {
-      let price_levels = ServerMessage::PriceLevels { bids: self.book.get_top_n_bids(25), asks: (self.book.get_top_n_asks(25)) }; 
+    if (idx+1)%100 == 0 {
+      let price_levels = ServerMessage::PriceLevels { snapshot: false, bids: self.book.get_top_n_bids(100), asks: (self.book.get_top_n_asks(100)) }; 
       messages.push(price_levels);
     }
 
