@@ -2,83 +2,13 @@ mod order_generator;
 mod engine;
 
 use std::{net::SocketAddr, ops::ControlFlow, time::Duration};
-use axum::{extract::{ws::{Message, WebSocket}, ConnectInfo, WebSocketUpgrade}, response::IntoResponse, routing::any, Router};
+use axum::{extract::{ws::{close_code::NORMAL, CloseFrame, Message, Utf8Bytes, WebSocket}, ConnectInfo, WebSocketUpgrade}, response::IntoResponse, routing::any, Router};
 use futures_util::{SinkExt, StreamExt};
 use order_generator::gen::Simulator;
 use serde::Deserialize;
 use tokio::{net::TcpListener, sync::mpsc::{self, Sender}, time};
 
 
-/*
-fn weighted_idx_draws(n: usize) -> u128 {
-    let start = Instant::now();
-
-    let weights = [2, 399999, 599999]; // ADD, CANCEL, MODIFY
-    //let choices = ["ADD", "CANCEL", "MODIFY"];
-    let dist = WeightedIndex::new(&weights).unwrap();
-    // let weights = vec![0, 4, 6];
-    // let dist = WeightedAliasIndex::new(weights).unwrap();
-    let mut rng = thread_rng();
-
-    let mut occ = HashMap::new();
-    
-    for _ in 0..n {
-        match dist.sample(&mut rng) {
-            0 => *occ.entry("ADD").or_insert(0) += 1,
-            1 =>  *occ.entry("CANCEL").or_insert(0) += 1,
-            2 => *occ.entry("MODIFY").or_insert(0) += 1,
-            _ => panic!("not possible case!!")
-        }
-    }
-    let duration = start.elapsed().as_millis();
-
-    println!("** occurences map: {:?}", occ);
-    duration
-}
-*/
-
-/*USE tHIS ONE */
-/*
-fn normal_draws(n: usize) -> u128{
-    let start = Instant::now();
-    let action_distr = Uniform::new(0.0, 1.0);
-    let action_probs = vec![0.0, 0.4, 0.6];  // ADD, CANCEL, MODIFY
-    let cuml_probs: Vec<f32> = action_probs.into_iter().scan(0.0, |acc, x| {
-        *acc += x;
-        Some(*acc)
-      }).collect();
-
-    // let cuml_probs: Vec<f32> = vec![0.0, 0.4 , 1.0];
-    //println!("cumulative probs: {:?}", cuml_probs);
-    
-    let mut rng = thread_rng();
-
-    let mut occ = HashMap::new();
-
-    for _ in 0..n {
-      
-      let rand_num = action_distr.sample(&mut rng);
-    //   let action_idx = cuml_probs.binary_search_by(|entry| match entry.partial_cmp(&rand_num) {
-    //     Some(Ordering::Equal) => Ordering::Greater,
-    //     Some(ord) => ord,
-    //     None => panic!("comparison failed!!")
-    //   }).unwrap_err(); // since we never return Equality we always get Err(idx)
-    let action_idx = cuml_probs.iter().position(|cumsum| rand_num <= *cumsum).unwrap();
-
-      match action_idx {
-        0 => *occ.entry("ADD").or_insert(0) += 1,
-        1 => *occ.entry("CANCEL").or_insert(0) += 1,
-        2 => *occ.entry("MODIFY").or_insert(0) += 1,
-        _ => panic!("error choosing a order type!!")
-      }
-    
-    }
-    let duration = start.elapsed().as_millis();
-
-    println!("** occurences map: {:?}", occ);
-    duration
-}
-*/
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum ClientMessage {
@@ -97,23 +27,6 @@ enum ClientMessage {
 #[tokio::main]
 async fn main() {
     
-  /*TESTS
-  let (mut normal_t, mut weighted_t) = (Vec::new(), Vec::new());
-  let n = 5_000_000;
-  println!("==== Starting (10 x 5_000_000) normal draws ====");
-  for _ in 0..10 {
-      normal_t.push(normal_draws(n));
-  }
-  println!("==== Starting (10 x 5_000_000) weighted index draws ====");
-  for _ in 0..10 {
-      weighted_t.push(weighted_idx_draws(n));
-  }
-  let normal_avg: f32 = normal_t.iter().sum::<u128>() as f32/10.0;
-  let weighted_avg: f32 = weighted_t.iter().sum::<u128>() as f32/10.0;
-  println!("Normal draws mean time: {:.2?}", normal_avg);
-  println!("Weighted draws mean time: {:.2?}", weighted_avg);
-  */
-
   let app = Router::new().route("/wslob", any(handler));
 
   let listener = TcpListener::bind("0.0.0.0:7575").await.expect("failed to start tcp listener");
@@ -133,30 +46,47 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
   let (mut sender, mut receiver) = socket.split();
   //TODO: check if unbounded channel can be used
   let (tx, mut rx) = mpsc::channel(1_000_000);
-
-  let mut send_task = tokio::spawn(async move {
+  
+  let send_task = tokio::spawn(async move {
     while let Some(msg) = rx.recv().await {
       // sending to the Client
       if sender.send(msg).await.is_err() {
         break;
       }
     }
+
+    println!("Closing connection to {:?}", who);
+    if let Err(e) = sender.send(Message::Close(Some(CloseFrame {
+      code: NORMAL,
+      reason: Utf8Bytes::from_static("Streaming complete")
+    }))).await {
+      println!("Could not send Close due to {:?}", e);
+    }
+
   });
 
-  let mut recv_task = tokio::spawn(async move {
-    //let mut cnt = 0;
+  let recv_task = tokio::spawn(async move {
     while let Some(Ok(client_msg)) = receiver.next().await {
       if process_message(client_msg, who, tx.clone()).await.is_break() {
         break;
       }
     }
-    //cnt
+    // println!("recv task over aka all order updates produced. we dont abort send task yet");
   });
 
+  /*TODO: see if need select!
   tokio::select! {
-    _send = &mut send_task => recv_task.abort(),
-    _rcv = &mut recv_task => send_task.abort(),
+    _send = &mut send_task => {
+      println!("send task over aka all orders sent to fronted!!");
+      recv_task.abort()},
+    _rcv = &mut recv_task => {
+      println!("recv task over aka all order updates produced. we dont abort send task yet");
+      // send_task.abort()},
+    }
   }
+  */
+
+  let (_r, _s) = tokio::join!(recv_task, send_task);
 
   println!("Websocket context {} destroyed", who);
 }
@@ -180,10 +110,15 @@ async fn process_message(msg: Message, who: SocketAddr, tx: Sender<Message> ) ->
 
           // seed the orderbook with 10k ADD limit orders
           simulator.seed_orderbook(10_000);
+          let snapshot = simulator.get_snapshot();
+          let snapshot_msg = Message::text(serde_json::to_string(&snapshot).expect("serializing snapshot failed!"));
+          if tx.send(snapshot_msg).await.is_err() {
+            println!("receiver half of channel dropped when sending initial snapshot!");
+            return ControlFlow::Break(());
+          }
 
           println!("[INFO] Starting simulation");
           for idx in 0..num_orders {
-
             // generate and process the orders
             simulator.generate_orders();
             let updates = simulator.generate_updates(idx);
@@ -193,6 +128,9 @@ async fn process_message(msg: Message, who: SocketAddr, tx: Sender<Message> ) ->
               break;
             };
           }
+          // println!("[INFO] Simulation complete and now waiting for 5 secs...");
+          // tokio::time::sleep(Duration::from_secs(5)).await;
+          return ControlFlow::Break(());
           // println!("engine stats: {:?}\nengine stats offset: {:?}", simulator.engine_stats, simulator.engine_stats_offset);
         },
         Ok(ClientMessage::Stop) => {
