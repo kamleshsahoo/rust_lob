@@ -15,7 +15,10 @@ title = "frontend"
 style = []
 
 # Additional JavaScript files
-script = []
+script = [
+    "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js",
+    "https://cdn.jsdelivr.net/npm/echarts-gl@2.0.9/dist/echarts-gl.min.js",
+]
 
 [web.resource.dev]
 
