@@ -42,8 +42,8 @@ pub enum ServerMessage {
 #[derive(Debug, Serialize, Clone)]
 pub struct EngineStats {
   order_type: String,
-  latency: u128,
-  avl_rebalances: u64,
+  latency: i64,
+  avl_rebalances: i64,
   executed_orders_cnt: usize
 }
 
@@ -124,7 +124,7 @@ impl Simulator {
     let start = Instant::now();
     self.book.add_limit_order(self.order_id, bid_or_ask, shares, Decimal::from_str(&price_string).expect("parsing price string to decimal failed"));
     let duration = start.elapsed().as_nanos();
-    self.engine_stats.push(EngineStats { order_type: String::from("ADD"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
+    self.engine_stats.push(EngineStats { order_type: String::from("ADD"), latency: duration as i64, avl_rebalances: self.book.avl_rebalances as i64, executed_orders_cnt: self.book.executed_orders_count });
     
     self.order_id += 1;
   }
@@ -136,7 +136,7 @@ impl Simulator {
         let start = Instant::now();
         self.book.cancel_limit_order(*order_id);
         let duration = start.elapsed().as_nanos();
-        self.engine_stats.push(EngineStats { order_type: String::from("CANCEL"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
+        self.engine_stats.push(EngineStats { order_type: String::from("CANCEL"), latency: duration as i64, avl_rebalances: self.book.avl_rebalances as i64, executed_orders_cnt: self.book.executed_orders_count });
       }
     }
   }
@@ -176,7 +176,7 @@ impl Simulator {
         let start = Instant::now();
         self.book.modify_limit_order(*order_id, shares, Decimal::from_str(&price_string).expect("parsing price string to decimal failed"));
         let duration = start.elapsed().as_nanos();
-        self.engine_stats.push(EngineStats { order_type: String::from("MODIFY"), latency: duration, avl_rebalances: self.book.avl_rebalances, executed_orders_cnt: self.book.executed_orders_count });
+        self.engine_stats.push(EngineStats { order_type: String::from("MODIFY"), latency: duration as i64, avl_rebalances: self.book.avl_rebalances as i64, executed_orders_cnt: self.book.executed_orders_count });
       }
     }
   }
@@ -217,7 +217,7 @@ impl Simulator {
   } 
 
   pub fn get_snapshot(&self) -> Vec<ServerMessage> {
-    vec![ServerMessage::PriceLevels { snapshot: true, bids: self.book.get_top_n_bids(25), asks: (self.book.get_top_n_asks(25)) }]
+    vec![ServerMessage::PriceLevels { snapshot: true, bids: self.book.get_top_n_bids(20), asks: (self.book.get_top_n_asks(20)) }]
   }
   
   pub fn generate_updates(&mut self, idx: usize) -> Vec<ServerMessage>{
