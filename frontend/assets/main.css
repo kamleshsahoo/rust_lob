@@ -282,7 +282,7 @@ body {
   width: 100%;
   overflow: hidden;
   /* height: 0; */
-  box-shadow: 0 2px 4px rgba(68, 199, 28, 0.1);
+  box-shadow: 0 2px 4px rgba(92, 228, 51, 0.1);
 
   h2 {
     text-align: center;
@@ -294,32 +294,34 @@ body {
   grid-column: 1/-1;
 }
 
-canvas {
+/* canvas {
   width: 100%;
   height: 100%;
   display: block;
-}
+} */
 
 #latency-hist {
-  max-height: 350px;
+  /* max-height: 350px; */
+  min-height: 300px;
 }
 
 #latency-bar {
-  max-height: 275px;
+  /* max-height: 275px; */
+  min-height: 250px;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 450px) {
   .chart-container {
     grid-template-columns: 1fr;
-    padding: 10px;
+    /* padding: 10px; */
   }
 
   #latency-hist {
-    max-height: 300px;
+    min-height: 250px;
   }
 
   #latency-bar {
-    max-height: 225px;
+    min-height: 200px;
   }
 
   .wide-chart {
@@ -329,20 +331,20 @@ canvas {
 
 @media only screen and (min-width: 1200px) {
   #latency-hist {
-    max-height: 500px;
+    min-height: 350px;
   }
   #latency-bar {
-    max-height: 350px;
+    min-height: 300px;
   }
 }
 
 @media only screen and (min-width: 2000px) {
   #latency-hist {
-    max-height: 650px;
+    min-height: 400px;
   }
 
   #latency-bar {
-    max-height: 400px;
+    min-height: 350px;
   }
 
   h2 {
