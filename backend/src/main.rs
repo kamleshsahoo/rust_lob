@@ -4,6 +4,7 @@ mod engine;
 use std::{io, net::SocketAddr, ops::ControlFlow, time::Duration};
 // use async_stream::{stream, try_stream};
 use axum::{extract::{ws::{close_code::NORMAL, CloseFrame, Message, Utf8Bytes, WebSocket}, ConnectInfo, WebSocketUpgrade}, response::IntoResponse, routing::any, Router};
+use futures::stream;
 // use futures::{pin_mut, stream::SplitSink};
 // use futures_util::{SinkExt, Stream, StreamExt};
 use futures_util::{SinkExt, StreamExt};
@@ -50,6 +51,8 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
   let (mut sender, mut receiver) = socket.split();
   //TODO: check if unbounded channel can be used
   let (tx, mut rx) = mpsc::channel(1_000_000);
+  // let mut message_buffer = Vec::with_capacity(100);
+  let mut batch_cntr: i32 = 0;
 
   loop { 
     tokio::select! {
@@ -106,11 +109,29 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
           rx.close();
           break;
         } else {
+          // message_buffer.push(msg);
+          // if message_buffer.len() >= 100 {
+          //   let l = stream::iter(message_buffer);
+          //   let x = sender.send_all(&mut l).await;
+          // };
+          if sender.feed(msg).await.is_err(){
+            println!("sending simulator updates via feed to dioxus server failed!");
+            break;
+          }
+
+          batch_cntr += 1;
+          
+          if batch_cntr >= 100 {
+            sender.flush().await.expect("flushing failed while sending batched updates to dioxus server!");
+            batch_cntr = 0;
+          }
           // Sending to the Client>>
           // TODO: see if we can use send_all to batch and send 
+          /* Working ver prior to send_all
           if sender.send(msg).await.is_err() {
             break;
           }
+          */
         }
       }
     }
@@ -200,9 +221,10 @@ fn receiver_stream(mut rx: Receiver<Message>) -> impl Stream<Item = Result<Messa
 
 async fn process_start_message_v2(tx: Sender<Message>, num_orders: usize, mean_price: f64, sd_price: f64, best_price_lvls: bool, throttle: u64) {
   //TODO: see if we need to add throttling
-  // let mut interval = time::interval(Duration::from_nanos(throttle));
+  // let mut interval = time::interval(Duration::from_micros(5));
   
   let mut simulator = Simulator::new(mean_price, sd_price, best_price_lvls);
+  // let mut update_buffer = Vec::with_capacity(100);
   // seed the orderbook with 10k ADD limit orders
   simulator.seed_orderbook(10_000);
   let snapshot = simulator.get_snapshot();
@@ -218,13 +240,23 @@ async fn process_start_message_v2(tx: Sender<Message>, num_orders: usize, mean_p
     // generate and process the orders
     simulator.generate_orders();
     let updates = simulator.generate_updates(idx);
+    // update_buffer.push(updates);
+    // if update_buffer.len() >=100 {
+    //   let batched_msg = Message::text(serde_json::to_string(&update_buffer).expect("failed to serialize batched simulator updates before sending to dioxus server!"));
+    //   tx.send(batched_msg).await.expect("failed to send batched simulator updates to intra channel receiver in axum server");
+    //   update_buffer.clear();
+    // }
+
+    /*Working Ver prior to batching*/
     let msg = Message::text(serde_json::to_string(&updates).expect("serializing server updates failed!"));
     if tx.send(msg).await.is_err() {
       panic!("receiver half of channel dropped!");
-      // break;
     };
-
+    
   }
+
+  // assert!(update_buffer.is_empty(), "found unsent simulator updates while sending stream complete CloseFrame to dioxus server");
+
   println!("[INFO] Completed simulation, sending close frame to channel");
   if tx.send(Message::Close(Some(CloseFrame {
     code: NORMAL,
