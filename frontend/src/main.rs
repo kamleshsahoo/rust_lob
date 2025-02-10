@@ -1,7 +1,7 @@
 mod components;
 mod utils;
 
-use std::{collections::HashMap, sync::OnceLock};
+use std::{collections::{HashMap, VecDeque}, sync::OnceLock};
 use dioxus::{logger::tracing::{error, info, warn}, prelude::*};
 use futures::{stream::SplitSink, SinkExt};
 use futures_util::StreamExt;
@@ -12,6 +12,16 @@ use tokio::sync::mpsc::{self, Sender};
 
 use utils::{enginestats::get_latency_by_ordertype, priceupdate::PriceLevelProcessor};
 use components::{modeselect::ModeSelector, results::ExecutionView};
+/*
+Test Deps
+plotters = "0.3.7"
+plotters-backend = "0.3.7"
+web-sys = { version = "0.3.77", features = [ "HtmlCanvasElement", "ResizeObserver", "ResizeObserverSize", "ResizeObserverEntry"] }
+plotters-canvas = "0.3.0"
+dioxus-resize-observer = "0.3.0"
+dioxus-use-mounted = "0.3.0"
+
+*/
 
 enum Action {
     Start,
@@ -198,7 +208,8 @@ fn App() -> Element {
     let mut latency: Signal<Vec<i64>> = use_signal(||Vec::new());
     let mut latency_by_ordertype: Signal<HashMap<String, Vec<f64>>> = use_signal(||HashMap::new());
     //executed orders
-    let mut fulfilled_orders: Signal<Vec<ExecutedOrders>> = use_signal(||vec![]);
+    //let mut fulfilled_orders: Signal<Vec<ExecutedOrders>> = use_signal(||vec![]);
+    let mut fulfilled_orders: Signal<VecDeque<ExecutedOrders>> = use_signal(||VecDeque::with_capacity(25));
     //Signals for showing Simulation or File upload settings 
     let mode: Signal<Mode> = use_signal(||Mode::Simulation); 
 
@@ -234,7 +245,8 @@ fn App() -> Element {
                         ask_lvls.set(vec![]);
                         raw_bids.set(vec![]);
                         raw_asks.set(vec![]);
-                        fulfilled_orders.set(vec![]);
+                        //fulfilled_orders.set(vec![]);
+                        fulfilled_orders.set(VecDeque::with_capacity(25));
                         latency.set(vec![]);
 
                         // TODO: better conditioning for x-y limits of latency histogram
@@ -436,12 +448,22 @@ fn App() -> Element {
                     */
                 },
                 DataUpdate::Transactions(trades) => {
-                    fulfilled_orders.extend(trades);
+                    let z = &mut *fulfilled_orders.write();
+                    z.extend(trades);
+                    //fulfilled_orders().extend(trades);
+                    
+                    /*Previous Working Ver
                     let current_fulfilled_orders = fulfilled_orders();
                     // Keep only last 25 trades
                     if current_fulfilled_orders.len() > 25 {
                         fulfilled_orders.set(current_fulfilled_orders[current_fulfilled_orders.len()-25..].to_vec());
                     }
+                    */
+                    if z.len() > 25 {
+                        z.pop_front();
+                        //fulfilled_orders().pop_front();
+                    }
+
                 }
             }
         }
