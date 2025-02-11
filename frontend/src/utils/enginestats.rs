@@ -45,10 +45,10 @@ impl LatencyProcessor {
 */
 
 use std::collections::HashMap;
-
+use charming::datatype::{CompositeValue, DataPoint, NumericValue};
 use crate::EngineStats;
 
-fn quantiles(vec: &mut Vec<u128>, qvals: &Vec<f64>) -> Vec<f64> {
+fn quantiles(vec: &mut Vec<i64>, qvals: &Vec<f64>) -> Vec<f64> {
   /*
   calculates a non-parametric estimate if the inv cumulative distributive function
   uses `linear` interpolation
@@ -88,13 +88,13 @@ pub fn get_latency_by_ordertype<'a>(stats: &'a Vec<EngineStats>, qvals: &'a Vec<
   let mut latency_fold = stats.iter().fold(HashMap::new(), |mut map_state, e| {
     match e.order_type.as_str() {
       "ADD" => { 
-        map_state.entry("ADD").or_insert(Vec::<u128>::new()).push(e.latency)
+        map_state.entry("ADD").or_insert(Vec::<i64>::new()).push(e.latency)
       },
       "MODIFY" => {
-        map_state.entry("MODIFY").or_insert(Vec::<u128>::new()).push(e.latency)
+        map_state.entry("MODIFY").or_insert(Vec::<i64>::new()).push(e.latency)
       },
       "CANCEL" => {
-        map_state.entry("CANCEL").or_insert(Vec::<u128>::new()).push(e.latency)
+        map_state.entry("CANCEL").or_insert(Vec::<i64>::new()).push(e.latency)
       },
       _ => panic!("unsupported order type in engine stat!")
     }
@@ -108,4 +108,76 @@ pub fn get_latency_by_ordertype<'a>(stats: &'a Vec<EngineStats>, qvals: &'a Vec<
 
   latency_fold_stats
 
+}
+
+#[derive(Debug)]
+struct Bin {
+    range: BinRange,
+    count: usize,
+}
+
+
+#[derive(Debug)]
+enum BinRange {
+    Fixed(i64, i64),  // [lower, upper)
+    CatchAll(i64),    // [max, inf)
+}
+
+pub fn bin_data(data: &Vec<i64>, bin_width: i64, max_value: i64) ->  Vec<DataPoint> {
+
+    assert_eq!(false, data.is_empty(), "data for binning should not be empty!");
+
+    let num_bins: i64 = max_value/bin_width;
+    let mut bins = HashMap::new();
+
+    for &value in data {
+      if value >= max_value {
+        *bins.entry(num_bins).or_insert(0) += 1;
+        continue;
+      }
+      let bin_index = value/bin_width;
+      *bins.entry(bin_index).or_insert(0) += 1;
+    }
+
+    let mut result = Vec::new();
+    for (bin_index, count) in bins {
+      let range = if bin_index == num_bins {
+        BinRange::CatchAll(max_value)
+    } else {
+        let lower = bin_index * bin_width;
+        let upper = lower + bin_width;
+        BinRange::Fixed(lower, upper)
+    };
+
+    result.push(Bin { range, count });
+    }
+
+  result.sort_by_key(|bin| match bin.range {
+    BinRange::Fixed(lower, _) | BinRange::CatchAll(lower) => lower
+  });
+ 
+
+  // let _u: Vec<_> = result.drain(num_bins as usize..).collect();
+  // info!("excluded bin: {:?}", _u);
+  
+  let processed_bins = result.into_iter().filter_map(|bin| {
+    match bin.range {
+      BinRange::Fixed(x0, x1) => {
+        let centre: f64 = (x0 + x1) as f64 / 2.0;
+        let label = format!("{}-{}", x0, x1);
+      
+        Some(DataPoint::Value(CompositeValue::Array(vec![
+          CompositeValue::Number(NumericValue::Float(centre)), 
+          CompositeValue::Number(NumericValue::Integer(bin.count as i64)),
+          CompositeValue::Number(NumericValue::Integer(x0)),
+          CompositeValue::Number(NumericValue::Integer(x1)),
+          CompositeValue::String(label)
+        ])))      
+        },
+        BinRange::CatchAll(_) => None
+      }
+    }
+  ).collect::<Vec<_>>();
+
+  processed_bins
 }
