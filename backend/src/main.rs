@@ -11,7 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use order_generator::gen::Simulator;
 use serde::Deserialize;
 //use tokio::{net::TcpListener, sync::mpsc::{self, Receiver, Sender}, time};
-use tokio::{net::TcpListener, sync::mpsc::{self, Sender}, time};
+use tokio::{net::TcpListener, sync::mpsc::{self, Sender}, time::{self, sleep}};
 
 
 #[derive(Debug, Deserialize)]
@@ -221,7 +221,7 @@ fn receiver_stream(mut rx: Receiver<Message>) -> impl Stream<Item = Result<Messa
 
 async fn process_start_message_v2(tx: Sender<Message>, num_orders: usize, mean_price: f64, sd_price: f64, best_price_lvls: bool, throttle: u64) {
   //TODO: see if we need to add throttling
-  // let mut interval = time::interval(Duration::from_micros(5));
+  // let mut interval = time::interval(Duration::from_micros(500));
   
   let mut simulator = Simulator::new(mean_price, sd_price, best_price_lvls);
   // let mut update_buffer = Vec::with_capacity(100);
@@ -252,6 +252,10 @@ async fn process_start_message_v2(tx: Sender<Message>, num_orders: usize, mean_p
     if tx.send(msg).await.is_err() {
       panic!("receiver half of channel dropped!");
     };
+
+    if idx % 1_000 == 0 {
+      sleep(Duration::from_micros(50)).await;
+    }
     
   }
 
