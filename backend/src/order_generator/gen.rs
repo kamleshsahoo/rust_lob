@@ -36,7 +36,8 @@ pub enum ServerMessage {
   PriceLevels { snapshot: bool, bids: Vec<(Decimal, u64)>, asks: Vec<(Decimal, u64)> },
   Trades (Vec<ExecutedOrders>),
   // EngineStats(Vec<EngineStats>)
-  ExecutionStats (EngineStats)
+  ExecutionStats (EngineStats),
+  BestLevels {best_buy: Option<Decimal>, best_sell: Option<Decimal>}
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -224,21 +225,25 @@ impl Simulator {
     
     let mut messages = Vec::new();
 
-    // sending top `n=100` price levels 
+    // sending top `n=1000` price levels 
     // NOTE: bids or asks may be empty vectors
-    if (idx+1)%100 == 0 {
-      let price_levels = ServerMessage::PriceLevels { snapshot: false, bids: self.book.get_top_n_bids(100), asks: (self.book.get_top_n_asks(100)) }; 
-      messages.push(price_levels);
+    if (idx+1) % 1_000 == 0 {
+    let price_levels = ServerMessage::PriceLevels { snapshot: false, bids: self.book.get_top_n_bids(1_000), asks: (self.book.get_top_n_asks(1_000)) }; 
+    messages.push(price_levels);
     }
 
     // we always send the engine stats
     let engine_stat = self.engine_stats.get(idx).expect("each order should have a execution stat!").clone();
     messages.push(ServerMessage::ExecutionStats(engine_stat));
 
+    if idx % 500 == 0 {
+      messages.push(ServerMessage::BestLevels { best_buy: self.book.highest_buy, best_sell: self.book.lowest_sell });
+    }
+
     if let Some(trades) = self.book.get_executed_orders(&mut self.executed_orders_offset) {
       messages.push(ServerMessage::Trades(trades));
     }
-
+        
     messages
   }
 }
