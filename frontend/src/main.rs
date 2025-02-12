@@ -1,7 +1,7 @@
 mod components;
 mod utils;
 
-use std::{collections::{HashMap, VecDeque}, sync::OnceLock};
+use std::{collections::HashMap, sync::OnceLock};
 use dioxus::{logger::tracing::{error, info, warn}, prelude::*};
 use futures::{stream::SplitSink, SinkExt};
 use futures_util::StreamExt;
@@ -12,6 +12,7 @@ use tokio::sync::mpsc::{self, Sender};
 
 use utils::{enginestats::get_latency_by_ordertype, priceupdate::PriceLevelProcessor};
 use components::{modeselect::ModeSelector, results::ExecutionView};
+use web_sys::{window, Performance};
 /*
 Test Deps
 plotters = "0.3.7"
@@ -40,7 +41,8 @@ pub enum ServerMessage {
   PriceLevels { snapshot: bool, bids: Vec<(Decimal, u64)>, asks: Vec<(Decimal, u64)> },
   Trades (Vec<ExecutedOrders>),
   // EngineStats(Vec<EngineStats>)
-  ExecutionStats (EngineStats)
+  ExecutionStats (EngineStats),
+  BestLevels {best_buy: Option<Decimal>, best_sell: Option<Decimal>}
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -109,7 +111,9 @@ enum DataUpdate {
     //Latency(u128),
     PlotData(EngineStats),
     PriceLevels { snapshot: bool, bids: Vec<(Decimal, u64)>, asks: Vec<(Decimal, u64)> },
-    Transactions(Vec<ExecutedOrders>)
+    Transactions(Vec<ExecutedOrders>),
+    BestPrices {best_buy: Option<Decimal>, best_sell: Option<Decimal>}
+
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +126,69 @@ enum Mode {
 enum View {
     Selector,
     Execution
+}
+
+struct UpdateTimings {
+    price_levels: f64,
+    latency_plots: f64,
+    trades: f64,
+    spread: f64,
+}
+
+enum DomElement {
+    PriceLevels,
+    Latency,
+    Trades,
+    Spread
+}
+
+struct DataCollector {
+    perf_inst: Performance,
+    last_updates: UpdateTimings,
+    // currently using same timeout for all plots
+    // values can be 16.0(60fps) or 32.0(30fps)
+    timeout: f64
+}
+
+impl DataCollector {
+    fn new(timeout: f64) -> Self {
+        let window = window().expect("window should exist in this context");
+        let perf_inst = window.performance().expect("performance should be available");
+        let init_update = (&perf_inst).now();
+
+        Self { 
+            perf_inst,
+            last_updates: UpdateTimings { 
+                price_levels: init_update,
+                latency_plots: init_update,
+                trades: init_update,
+                spread: init_update,
+            },
+            timeout
+        }
+    }
+
+    fn elapsed(&self, last_update: f64) -> f64 {
+        self.perf_inst.now() - last_update       
+    }
+    
+    fn should_update(&self, element: DomElement) -> bool {
+        match element {
+            DomElement::PriceLevels => self.elapsed(self.last_updates.price_levels) >= self.timeout,
+            DomElement::Latency => self.elapsed(self.last_updates.latency_plots) >= self.timeout,
+            DomElement::Trades => self.elapsed(self.last_updates.trades) >= self.timeout,
+            DomElement::Spread => self.elapsed(self.last_updates.spread) >= self.timeout,
+        }
+    }
+
+    fn reset_timer(&mut self, element: DomElement) {
+        match element {
+            DomElement::PriceLevels => self.last_updates.price_levels = self.perf_inst.now(),
+            DomElement::Latency => self.last_updates.latency_plots = self.perf_inst.now(),
+            DomElement::Trades => self.last_updates.trades = self.perf_inst.now(),
+            DomElement::Spread => self.last_updates.spread = self.perf_inst.now(),
+        }
+    }
 }
 
 async fn handle_websocket(ws_url: &str, start_payload: Message, update_tx: Sender<DataUpdate>) -> Result<(), Box<dyn std::error::Error>> {
@@ -163,6 +230,11 @@ async fn handle_websocket(ws_url: &str, start_payload: Message, update_tx: Sende
                             if let Err(e) = update_tx.send(DataUpdate::Transactions(trades)).await {
                                 warn!("sending executed orders to data update channel erred: {:?}", e);
                             }
+                        },
+                        ServerMessage::BestLevels { best_buy, best_sell } => {
+                            if let Err(e) = update_tx.send(DataUpdate::BestPrices { best_buy, best_sell }).await {
+                                warn!("sending best bid and ask level to data update channel erred: {:?}", e);
+                            }
                         }
                     }
                 }
@@ -199,9 +271,11 @@ fn App() -> Element {
     // ASK signals
     let mut ask_lvls: Signal<Vec<(Decimal, u64, u64, f32)>> = use_signal(||Vec::<(Decimal, u64, u64, f32)>::new());
     let mut raw_asks: Signal<Vec<(Decimal, u64)>> = use_signal(||Vec::<(Decimal, u64)>::new());
+    let (mut best_bid, mut best_ask, mut spread) = (use_signal(||None), use_signal(||None), use_signal(||None));
 
 
     let mut engine_stats: Vec<EngineStats> = vec![];
+    let mut executed_orders: Vec<ExecutedOrders> = vec![];
     // quantile values for error bars 
     let qvals: Vec<f64> = vec![0.15, 0.85];
 
@@ -209,7 +283,7 @@ fn App() -> Element {
     let mut latency_by_ordertype: Signal<HashMap<String, Vec<f64>>> = use_signal(||HashMap::new());
     //executed orders
     //let mut fulfilled_orders: Signal<Vec<ExecutedOrders>> = use_signal(||vec![]);
-    let mut fulfilled_orders: Signal<VecDeque<ExecutedOrders>> = use_signal(||VecDeque::with_capacity(25));
+    let mut fulfilled_orders: Signal<Vec<ExecutedOrders>> = use_signal(||Vec::with_capacity(25));
     //Signals for showing Simulation or File upload settings 
     let mode: Signal<Mode> = use_signal(||Mode::Simulation); 
 
@@ -246,8 +320,11 @@ fn App() -> Element {
                         raw_bids.set(vec![]);
                         raw_asks.set(vec![]);
                         //fulfilled_orders.set(vec![]);
-                        fulfilled_orders.set(VecDeque::with_capacity(25));
+                        fulfilled_orders.set(Vec::with_capacity(25));
                         latency.set(vec![]);
+                        best_bid.set(None);
+                        best_ask.set(None);
+                        spread.set(None);
 
                         // TODO: better conditioning for x-y limits of latency histogram
                         if sd_price < 25.0 {
@@ -376,6 +453,8 @@ fn App() -> Element {
     spawn(async move {
         // let mut latency_proc = LatencyProcessor::new();
         let mut pricelvl_proc = PriceLevelProcessor::new(ORDERBOOK_LEVELS);
+        
+        let mut data_collector = DataCollector::new(32.0);
 
         while let Some(update) = update_rx.recv().await {
             match update {
@@ -383,27 +462,27 @@ fn App() -> Element {
 
                     engine_stats.push(plot_data);
 
-                    if engine_stats.len() >= 2_500 {
+                    if engine_stats.len() >= 2_500 && data_collector.should_update(DomElement::Latency) {
                         let lat = engine_stats.iter().map(|e| e.latency).collect::<Vec<i64>>();
                         latency.set(lat);
                         let lat_by_ordertype = get_latency_by_ordertype(&engine_stats, &qvals);
                         latency_by_ordertype.set(lat_by_ordertype);
 
                         engine_stats.clear();
+                        data_collector.reset_timer(DomElement::Latency);
                     }
-                    
-                    // let mut l = current_latencies();
-                    // l.push(lat);
-                    // current_latencies.set(l);
-                    
-                    // if current_latencies().len() >= 2_500 {
-                    //     latency.set(current_latencies());
-                    //     current_latencies.set(vec![]);
-                    // }
                 },
                 DataUpdate::PriceLevels{snapshot, bids, asks} => {
                     
-                    pricelvl_proc.updater(snapshot, bids, asks, raw_bids, raw_asks, bid_lvls, ask_lvls);
+                    if snapshot {
+                        pricelvl_proc.updater(snapshot, bids, asks, raw_bids, raw_asks, bid_lvls, ask_lvls)
+                    } else {
+                        if data_collector.should_update(DomElement::PriceLevels) {
+                            pricelvl_proc.updater(snapshot, bids, asks, raw_bids, raw_asks, bid_lvls, ask_lvls);
+                            data_collector.reset_timer(DomElement::PriceLevels);
+                        }
+                    }
+
 
                     /*May remove but Working Version
                     if snapshot {
@@ -448,22 +527,50 @@ fn App() -> Element {
                     */
                 },
                 DataUpdate::Transactions(trades) => {
-                    let z = &mut *fulfilled_orders.write();
-                    z.extend(trades);
-                    //fulfilled_orders().extend(trades);
                     
-                    /*Previous Working Ver
-                    let current_fulfilled_orders = fulfilled_orders();
-                    // Keep only last 25 trades
-                    if current_fulfilled_orders.len() > 25 {
-                        fulfilled_orders.set(current_fulfilled_orders[current_fulfilled_orders.len()-25..].to_vec());
-                    }
-                    */
-                    if z.len() > 25 {
-                        z.pop_front();
-                        //fulfilled_orders().pop_front();
-                    }
+                    executed_orders.extend(trades);
 
+                    if data_collector.should_update(DomElement::Trades) {
+
+                        let current_length = executed_orders.len();
+                        if current_length > 25 {
+                            let to_remove = current_length - 25;
+                            executed_orders.drain(0..to_remove);
+                        } 
+                        
+                        fulfilled_orders.set(executed_orders.clone());
+                        /* One more working version
+                        let z = &mut *fulfilled_orders.write();
+                        z.extend(trades);
+                        */
+                        //fulfilled_orders().extend(trades);
+                        /*Previous Working Ver
+                        let current_fulfilled_orders = fulfilled_orders();
+                        // Keep only last 25 trades
+                        if current_fulfilled_orders.len() > 25 {
+                            fulfilled_orders.set(current_fulfilled_orders[current_fulfilled_orders.len()-25..].to_vec());
+                        }
+                        */
+                        /*one more working ver extn
+                        if z.len() > 25 {
+                            z.pop_front();
+                            //fulfilled_orders().pop_front();
+                        }
+                        */
+                        data_collector.reset_timer(DomElement::Trades);
+                    }
+                },
+                DataUpdate::BestPrices { best_buy, best_sell } => {
+
+                    if data_collector.should_update(DomElement::Spread) {
+                        if let (Some(bb), Some(bs)) = (best_buy, best_sell) {
+                            let current_spread = (bb-bs).abs();
+                            spread.set(Some(current_spread));
+                        }
+                        best_bid.set(best_buy);
+                        best_ask.set(best_sell);
+                        data_collector.reset_timer(DomElement::Spread);
+                    }
                 }
             }
         }
@@ -643,7 +750,16 @@ fn App() -> Element {
                         }
                     }
                 }
-                ExecutionView { bid_lvls, ask_lvls, latency, fulfilled_orders, latency_by_ordertype }
+                ExecutionView {
+                    bid_lvls,
+                    ask_lvls,
+                    latency,
+                    fulfilled_orders,
+                    latency_by_ordertype,
+                    best_bid,
+                    best_ask,
+                    spread
+                }
             }
         }
     }
