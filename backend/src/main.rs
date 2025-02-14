@@ -1,17 +1,12 @@
 mod order_generator;
 mod engine;
 
-use std::{io, net::SocketAddr, ops::ControlFlow, time::Duration};
-// use async_stream::{stream, try_stream};
-use axum::{extract::{ws::{close_code::NORMAL, CloseFrame, Message, Utf8Bytes, WebSocket}, ConnectInfo, WebSocketUpgrade}, response::IntoResponse, routing::any, Router};
-use futures::stream;
-// use futures::{pin_mut, stream::SplitSink};
-// use futures_util::{SinkExt, Stream, StreamExt};
+use std::net::SocketAddr;
+use axum::{extract::{ws::{Message, WebSocket}, ConnectInfo, WebSocketUpgrade}, response::IntoResponse, routing::any, Router};
 use futures_util::{SinkExt, StreamExt};
-use order_generator::gen::Simulator;
+use order_generator::gen::{ServerMessage, Simulator};
 use serde::Deserialize;
-//use tokio::{net::TcpListener, sync::mpsc::{self, Receiver, Sender}, time};
-use tokio::{net::TcpListener, sync::mpsc::{self, Sender}, time::{self, sleep}};
+use tokio::{net::TcpListener, sync::mpsc::{self, Sender}};
 
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +23,40 @@ enum ClientMessage {
   Stop,
 }
 
+enum Simulation {
+  Start(Vec<ServerMessage>),
+  Data(Vec<ServerMessage>),
+  Complete
+}
+
+/*
+struct WebSocketBatcher {
+  last_update: Instant,
+  batch_interval: Duration,
+  engine_stats: Vec<EngineStats>,
+  trades: Vec<ExecutedOrders>
+}
+
+impl WebSocketBatcher {
+  fn new(socket_batch_interval: Duration) -> Self {
+    Self {
+      last_update: Instant::now(),
+      batch_interval: socket_batch_interval,
+      engine_stats: Vec::new(),
+      trades: Vec::new(),
+    }
+  }
+
+  fn should_send(&self) -> bool {
+    self.last_update.elapsed() >= self.batch_interval
+  }
+
+  fn reset_timer(&mut self) {
+    self.last_update = Instant::now();
+  }
+
+}
+*/
 
 #[tokio::main]
 async fn main() {
@@ -49,10 +78,10 @@ async fn handler (ws: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<SocketAdd
 async fn handle_socket(socket: WebSocket, who: SocketAddr) {
 
   let (mut sender, mut receiver) = socket.split();
-  //TODO: check if unbounded channel can be used
   let (tx, mut rx) = mpsc::channel(1_000_000);
-  // let mut message_buffer = Vec::with_capacity(100);
-  let mut batch_cntr: i32 = 0;
+
+  // let mut ws_batcher = WebSocketBatcher::new(Duration::from_micros(10));
+  let mut batch: Vec<Vec<ServerMessage>>  = vec![];
 
   loop { 
     tokio::select! {
@@ -69,7 +98,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
                   // let (throttle, num_orders) = (throttle_nanos.unwrap_or(1_000_000_000), total_objects.unwrap_or(1_000));
                   // let (mean, sd, best_price_lvls) = (mean_price.unwrap_or(300.0), sd_price.unwrap_or(50.0), best_price_levels.unwrap_or(false));
 
-                  tokio::spawn(process_start_message_v2(tx.clone(), total_objects, mean_price, sd_price, best_price_levels, throttle_nanos));
+                  tokio::spawn(process_start_message(tx.clone(), total_objects, mean_price, sd_price, best_price_levels, throttle_nanos));
                },
                ClientMessage::Stop => {
                 println!(">>> {} requested STOP", who);
@@ -100,20 +129,101 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
 
       Some(msg) = rx.recv() => {
         
+        match msg {
+          Simulation::Complete => {
+            println!("Simulation complete. Closing the simulation channel and droping the socket connection");
+            if !batch.is_empty() {
+              //println!("sending rem updates: {:?}", &batch.len());
+              let update_msg = Message::text(serde_json::to_string(&batch).expect("serializing final server updates failed!"));
+              if sender.send(update_msg).await.is_err() {
+                break;
+              }
+            }
+            rx.close();
+            break;
+          },
+          Simulation::Start(snapshot) => {
+            // << Send intial snapshot to WebSocket Client immediately >>
+            let snapshot_msg = Message::text(serde_json::to_string(&vec![snapshot]).expect("serializing snapshot failed!"));
+            if sender.send(snapshot_msg).await.is_err() {
+              break;
+            }
+          },
+          Simulation::Data(data_updates) => {
+            //<< Send batched updates to the Websocket Client >>
+            batch.push(data_updates);
+
+            if batch.len() >= 1_000 {
+              //println!("batch: {:?}", &batch.len());
+              let update_msg = Message::text(serde_json::to_string(&batch).expect("serializing server updates failed!"));
+              if sender.send(update_msg).await.is_err() {
+                break;
+              }
+              batch.clear();
+            }
+          }
+
+
+          /*Working Ver with time based batching
+          Simulation::Data(mut data_updates) => {
+            // << Send batched updates to the Websocket Client >>
+            
+            // extract the engine stats (1st element) and store
+            if let ServerMessage::ExecutionStats(current_stat) = data_updates.remove(0) {
+              ws_batcher.engine_stats.extend(current_stat);
+            }
+
+            // extract new trades (if any) which would be the last elem
+            if let Some(ServerMessage::Trades(t)) = data_updates.last() {
+              //println!("new trades: {:?}", &t);
+              if let Some(ServerMessage::Trades(new_trades)) = data_updates.pop() {
+                ws_batcher.trades.extend(new_trades);
+              }
+            };
+
+            // check if its time to send update
+            if ws_batcher.should_send() {
+              
+              data_updates.push(ServerMessage::ExecutionStats(ws_batcher.engine_stats.clone()));
+              
+              if !ws_batcher.trades.is_empty() {
+                data_updates.push(ServerMessage::Trades(ws_batcher.trades.clone()))
+              };
+              
+              let update_msg = Message::text(serde_json::to_string(&data_updates).expect("serializing server updates failed!"));
+              if sender.send(update_msg).await.is_err() {
+                break;
+              }
+              // reset the timer & clear the buffer
+              ws_batcher.engine_stats.clear();
+              ws_batcher.trades.clear();
+              ws_batcher.reset_timer();
+
+            }
+          },
+          */
+        }
+        
+        /*Working Ver with serialized msg on channel
         if let Message::Close(c) = msg {
           if let Some(cf) = c {
-            println!("CloseChannel frame: code {} and reason {}", cf.code, cf.reason)
+            println!("CloseChannel frame: code {} and reason: {}", cf.code, cf.reason)
           } else{
             println!(">>> Somehow got close channel request without CloseFrame");
           }
           rx.close();
           break;
         } else {
-          // message_buffer.push(msg);
-          // if message_buffer.len() >= 100 {
-          //   let l = stream::iter(message_buffer);
-          //   let x = sender.send_all(&mut l).await;
-          // };
+          // Sending to the Client>>
+          if last_update.elapsed() >= ws_send_freq {
+
+            if sender.send(msg).await.is_err() {
+            break;
+          }
+          last_update = Instant::now();
+        }
+
+          /* Working ver with batches
           if sender.feed(msg).await.is_err(){
             println!("sending simulator updates via feed to dioxus server failed!");
             break;
@@ -125,113 +235,27 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
             sender.flush().await.expect("flushing failed while sending batched updates to dioxus server!");
             batch_cntr = 0;
           }
-          // Sending to the Client>>
-          // TODO: see if we can use send_all to batch and send 
-          /* Working ver prior to send_all
-          if sender.send(msg).await.is_err() {
-            break;
-          }
           */
         }
+        */
+
       }
     }
   }
-
- /*
-  while let Some(Ok(client_msg)) = receiver.next().await {
-    match client_msg {
-      Message::Text(t) => {
-        println!(">>> {} sent string: {:?}", who, t);
-        let payload = serde_json::from_str::<ClientMessage>(t.as_str());
-
-        match payload {
-          Ok(ClientMessage::Start { total_objects, throttle_nanos, mean_price, sd_price , best_price_levels }) => {
-            
-            println!("client payload\ntotal objects: {:?} nanos: {:?} mean: {:?} sd: {:?} show best price levels: {:?}", total_objects, throttle_nanos, mean_price, sd_price, best_price_levels);
-            
-            let (throttle, num_orders) = (throttle_nanos.unwrap_or(1_000_000_000), total_objects.unwrap_or(1_000));
-            let (mean, sd, best_price_lvls) = (mean_price.unwrap_or(300.0), sd_price.unwrap_or(50.0), best_price_levels.unwrap_or(false));
-
-            tokio::spawn(process_start_message_v2(tx.clone(), num_orders, mean, sd, best_price_lvls, throttle));
-            
-          },
-          Ok(ClientMessage::Stop) => {
-            println!(">>> {} requested STOP", who);
-            break;
-          },
-          Err(e) => {
-            println!("client Payload error: {:?}", e);
-            break;
-          }
-        }
-      },
-      Message::Close(c) => {break;},
-      _ => { println!(">> {} sent Binary, Ping or Pong", who); }
-    }
-
-
-
-  }
-  */
-
-
-  /*TODO: see if need select!
-  tokio::select! {
-    _send = &mut send_task => {
-      println!("send task over aka all orders sent to fronted!!");
-      recv_task.abort()},
-    _rcv = &mut recv_task => {
-      println!("recv task over aka all order updates produced. we dont abort send task yet");
-      // send_task.abort()},
-    }
-  }
-  */
 
   println!("Websocket context {} destroyed", who);
 }
 
-/*TODO: send the msgs in stream 
-async fn process_messages(
-  mut sender: SplitSink<WebSocket, Message>,
-  mut rx: Receiver<Message>
-) -> Result<(), Box<dyn std::error::Error>> {
-
-  let mut stream = receiver_stream(rx);
-  pin_mut!(stream);
-  
-  let _s = sender.send_all(&mut stream).await?;
-
-  Ok(())
-}
-
-fn receiver_stream(mut rx: Receiver<Message>) -> impl Stream<Item = Result<Message, Error>> {
-  
-  stream! {
-    while let Some(msg) = rx.recv().await {
-      match msg {
-        Message::Close(_) => {
-          break;
-        }
-        _ => yield Ok(msg),
-      }
-    }
-  }
-}
-*/
-
-async fn process_start_message_v2(tx: Sender<Message>, num_orders: usize, mean_price: f64, sd_price: f64, best_price_lvls: bool, throttle: u64) {
+async fn process_start_message(tx: Sender<Simulation>, num_orders: usize, mean_price: f64, sd_price: f64, best_price_lvls: bool, throttle: u64) {
   //TODO: see if we need to add throttling
-  // let mut interval = time::interval(Duration::from_micros(500));
   
   let mut simulator = Simulator::new(mean_price, sd_price, best_price_lvls);
-  // let mut update_buffer = Vec::with_capacity(100);
   // seed the orderbook with 10k ADD limit orders
   simulator.seed_orderbook(10_000);
   let snapshot = simulator.get_snapshot();
-  let snapshot_msg = Message::text(serde_json::to_string(&snapshot).expect("serializing snapshot failed!"));
-  if tx.send(snapshot_msg).await.is_err() {
+  
+  if tx.send(Simulation::Start(snapshot)).await.is_err() {
     panic!("receiver half of channel dropped when sending initial snapshot!");
-    // return ControlFlow::Break(());
   }
 
   println!("[INFO] Starting simulation");
@@ -240,109 +264,25 @@ async fn process_start_message_v2(tx: Sender<Message>, num_orders: usize, mean_p
     // generate and process the orders
     simulator.generate_orders();
     let updates = simulator.generate_updates(idx);
-    // update_buffer.push(updates);
-    // if update_buffer.len() >=100 {
-    //   let batched_msg = Message::text(serde_json::to_string(&update_buffer).expect("failed to serialize batched simulator updates before sending to dioxus server!"));
-    //   tx.send(batched_msg).await.expect("failed to send batched simulator updates to intra channel receiver in axum server");
-    //   update_buffer.clear();
-    // }
 
-    /*Working Ver prior to batching*/
-    let msg = Message::text(serde_json::to_string(&updates).expect("serializing server updates failed!"));
-    if tx.send(msg).await.is_err() {
+    if tx.send(Simulation::Data(updates)).await.is_err() {
       panic!("receiver half of channel dropped!");
     };
-
-    if idx % 1_000 == 0 {
-      sleep(Duration::from_micros(50)).await;
-    }
     
   }
+  //println!("trades: {:?}", simulator.book.executed_orders);
+  println!("[INFO] Completed simulation (total trades: {:?}), sending close frame to channel", simulator.book.executed_orders.len());
+  // if tx.send(Message::Close(Some(CloseFrame {
+  //   code: NORMAL,
+  //   reason: Utf8Bytes::from_static("Streaming complete")
+  // }))).await.is_err() { 
+  //   println!("Could not send Close frame to channel after simulation complete!");
+  // }
 
-  // assert!(update_buffer.is_empty(), "found unsent simulator updates while sending stream complete CloseFrame to dioxus server");
+  // sleep a bit before dropping the connection
+  // sleep(Duration::from_millis(5)).await;
 
-  println!("[INFO] Completed simulation, sending close frame to channel");
-  if tx.send(Message::Close(Some(CloseFrame {
-    code: NORMAL,
-    reason: Utf8Bytes::from_static("Streaming complete")
-  }))).await.is_err() { 
-    println!("Could not send Close frame to channel after simulation complete!");
+  if tx.send(Simulation::Complete).await.is_err() { 
+    panic!("Could not send close signal to channel after simulation was complete!");
   }
-
 }
-
-
-/* DEPRECATED Simulator
-async fn process_message_deprecated(msg: Message, who: SocketAddr, tx: Sender<Message> ) -> ControlFlow<(), ()> {
-  match msg {
-    Message::Text(t) => {
-      println!(">>> {} sent string: {:?}", who, t);
-      let client_msg = serde_json::from_str::<ClientMessage>(t.as_str());
-      match client_msg {
-        Ok(ClientMessage::Start { total_objects, throttle_nanos, mean_price, sd_price , best_price_levels }) => {
-          
-          println!("client payload\ntotal objects: {:?} nanos: {:?} mean: {:?} sd: {:?} show best price levels: {:?}", total_objects, throttle_nanos, mean_price, sd_price, best_price_levels);
-
-          let (throttle, num_orders) = (throttle_nanos.unwrap_or(1_000_000_000), total_objects.unwrap_or(10));
-          let (mean, sd) = (mean_price.unwrap_or(300.0), sd_price.unwrap_or(50.0));
-
-          let mut simulator = Simulator::new(mean, sd, best_price_levels.unwrap_or(false));
-          //TODO: see if we need to add throttling
-          let mut interval = time::interval(Duration::from_nanos(throttle));
-
-          // seed the orderbook with 10k ADD limit orders
-          simulator.seed_orderbook(10_000);
-          let snapshot = simulator.get_snapshot();
-          let snapshot_msg = Message::text(serde_json::to_string(&snapshot).expect("serializing snapshot failed!"));
-          if tx.send(snapshot_msg).await.is_err() {
-            println!("receiver half of channel dropped when sending initial snapshot!");
-            return ControlFlow::Break(());
-          }
-
-          println!("[INFO] Starting simulation");
-          for idx in 0..num_orders {
-            // generate and process the orders
-            simulator.generate_orders();
-            let updates = simulator.generate_updates(idx);
-            let msg = Message::text(serde_json::to_string(&updates).expect("serializing server updates failed!"));
-            if tx.send(msg).await.is_err() {
-              println!("receiver half of channel dropped!");
-              break;
-            };
-          }
-          // println!("[INFO] Simulation complete and now waiting for 5 secs...");
-          // tokio::time::sleep(Duration::from_secs(5)).await;
-          return ControlFlow::Break(());
-          // println!("engine stats: {:?}\nengine stats offset: {:?}", simulator.engine_stats, simulator.engine_stats_offset);
-        },
-        Ok(ClientMessage::Stop) => {
-          println!(">>> {} requested STOP", who);
-          return ControlFlow::Break(())
-        },
-        Err(e) => {
-          println!(">>> {} errored with: {:?}, when parsing user message to ClientMessage", who, e);
-          return ControlFlow::Break(())
-        }
-      }
-    },
-    Message::Close(c) => {
-      if let Some(cf) = c {
-        println!(">>> {} sent close with code {} and reason {}", who, cf.code, cf.reason)
-      } else {
-        println!(">>> {} somehow sent close message without CloseFrame", who);
-      }
-      return ControlFlow::Break(());
-    },
-    Message::Binary(d) => {
-      println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);
-    },
-    Message::Pong(v) => {
-      println!(">>> {} sent pong with {:?}", who, v);
-    },
-    Message::Ping(v) => {
-      println!(">>> {} sent ping with {:?}", who, v);
-    },
-  }
-  ControlFlow::Continue(())
-}
-*/
