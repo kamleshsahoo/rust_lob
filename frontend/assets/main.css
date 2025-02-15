@@ -1,4 +1,5 @@
 /* App-wide styling */
+/*@import url("https://fonts.googleapis.com/css2?family=Roboto&display=swap");*/
 :root {
   --bg-dark: #111827;
   --bg-card: #1f2937;
@@ -8,7 +9,10 @@
   --blue-600: #2563eb;
   --blue-700: #1d4ed8;
   --red-500: #ef4444;
+  --bright-red: #f87171;
   --green-500: #22c55e;
+  --bright-green: #34d399;
+  --bright-blue: #60a5fa;
 }
 
 * {
@@ -275,7 +279,7 @@ body {
 }
 
 .chart-card {
-  background: white;
+  /* background: white; */
   /* padding: 1rem; */
   border-radius: 0.5rem;
   min-width: 0;
@@ -302,26 +306,31 @@ body {
 
 #latency-hist {
   /* max-height: 350px; */
-  min-height: 300px;
+  height: 300px;
 }
 
 #latency-bar {
   /* max-height: 275px; */
-  min-height: 250px;
+  height: 250px;
 }
 
-@media (max-width: 450px) {
+#latency-3d {
+  /* max-height: 275px; */
+  height: 250px;
+}
+
+@media (max-width: 568px) {
   .chart-container {
     grid-template-columns: 1fr;
     /* padding: 10px; */
   }
 
   #latency-hist {
-    min-height: 250px;
+    height: 250px;
   }
 
   #latency-bar {
-    min-height: 200px;
+    height: 200px;
   }
 
   .wide-chart {
@@ -331,20 +340,20 @@ body {
 
 @media only screen and (min-width: 1200px) {
   #latency-hist {
-    min-height: 350px;
+    height: 350px;
   }
   #latency-bar {
-    min-height: 300px;
+    height: 300px;
   }
 }
 
 @media only screen and (min-width: 2000px) {
   #latency-hist {
-    min-height: 400px;
+    height: 400px;
   }
 
   #latency-bar {
-    min-height: 350px;
+    height: 350px;
   }
 
   h2 {
@@ -387,7 +396,8 @@ body {
 }
 
 .table-card {
-  background: white;
+  /* background: white; */
+  background: var(--bg-card);
   padding: 0.5em;
   min-width: 0;
   border-radius: 0.5rem;
@@ -407,7 +417,58 @@ body {
 
 .spread-card {
   flex: 1;
-  color: blueviolet;
+  display: flex;
+  flex-direction: column;
+  gap: 1em;
+}
+
+.spread-container {
+  max-height: 12em;
+}
+
+.metric {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+  padding: 0.5em;
+  border-radius: 0.375rem;
+  transition: background-color 0.3s;
+}
+
+.metric:hover {
+  background-color: var(--bg-card-dark);
+}
+
+.metric-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric label {
+  font-size: 0.875em;
+  color: var(--text-muted);
+}
+
+.metric .value {
+  font-size: 1.125em;
+  color: var(--text-light);
+}
+
+.icon {
+  width: 1.5em;
+  height: 1.5em;
+}
+
+.best-buy {
+  color: var(--bright-green);
+}
+
+.best-ask {
+  color: var(--bright-red);
+}
+
+.spread {
+  color: var(--bright-blue);
 }
 
 .trades-card {
@@ -500,7 +561,7 @@ tbody {
   }
 }
 
-.orderbook-spread {
+/* .orderbook-spread {
   color: #98a6af;
   background-color: #121723;
   width: 50%;
@@ -511,7 +572,7 @@ tbody {
     position: absolute;
     top: 5px;
   }
-}
+} */
 
 .orderbook-pricerow {
   display: flex;
