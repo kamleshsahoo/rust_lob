@@ -1,30 +1,18 @@
 #![allow(non_snake_case)]
-
 mod pages;
 mod components;
 mod utils;
 
+use components::nav::NavBar;
 use dioxus::prelude::*;
-// use dioxus_router::prelude::*;
+use pages::{simulator::Simulator, home::Home};
 
-use pages::simulator::Simulator;
-
-/*
-Test Deps
-plotters = "0.3.7"
-plotters-backend = "0.3.7"
-web-sys = { version = "0.3.77", features = [ "HtmlCanvasElement", "ResizeObserver", "ResizeObserverSize", "ResizeObserverEntry"] }
-plotters-canvas = "0.3.0"
-dioxus-resize-observer = "0.3.0"
-dioxus-use-mounted = "0.3.0"
-
-*/
-
-
-
-#[derive(Routable, Clone)]
+#[derive(Routable, PartialEq, Clone)]
 enum Route {
+    #[layout(NavBar)]
     #[route("/")]
+    Home {},
+    #[route("/simulator")]
     Simulator {},
     #[route("/:..route")]
     PageNotFound { route: Vec<String> }
@@ -33,7 +21,6 @@ enum Route {
 fn main() {
     dioxus::launch(App);
 }
-
 
 fn App() -> Element {
     rsx! { Router::<Route> {} }
@@ -47,5 +34,3 @@ fn PageNotFound(route: Vec<String>) -> Element {
         pre { color: "red", "log:\nattemped to navigate to: {route:?}" }
     }
 }
-
-
