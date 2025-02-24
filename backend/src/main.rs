@@ -2,7 +2,7 @@ mod order_generator;
 mod engine;
 
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
-use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, State, WebSocketUpgrade}, http::{HeaderValue, Method}, response::IntoResponse, routing::{any, post}, Json, Router};
+use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, DefaultBodyLimit, Multipart, State, WebSocketUpgrade}, http::{HeaderValue, Method}, response::IntoResponse, routing::{any, post}, Json, Router};
 use futures::lock::Mutex;
 use futures_util::{SinkExt, StreamExt};
 use order_generator::{gen::{ServerMessage, Simulator}, upload::{process_upload_orders, FileUploadOrderType, FinalStats, UploadError, UploadRequest, UploadResponse}};
@@ -15,6 +15,8 @@ type OrderSender = mpsc::Sender<Vec<FileUploadOrderType>>;
 type OrderReceiver = mpsc::Receiver<Vec<FileUploadOrderType>>;
 type ResultSender = mpsc::Sender<HashMap<String, FinalStats>>;
 type ResultReceiver = mpsc::Receiver<HashMap<String, FinalStats>>;
+// allow max file uploads of 300MB for the /largeupload route
+const MAX_FILE_SIZE: usize = 1024 * 1024 * 300;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -117,8 +119,9 @@ async fn main() {
     
   let app = Router::new()
   .route("/wslob", any(ws_handler))
-  .route("/file", post(upload_handler))
-  .with_state(session_manager)
+  .route("/smallupload", post(small_upload_handler).with_state(session_manager))
+  .route("/largeupload", post(large_upload_handler).layer(DefaultBodyLimit::max(MAX_FILE_SIZE)))
+  // .with_state(session_manager)
   .layer(cors);
 
   let listener = TcpListener::bind("0.0.0.0:7575").await.expect("failed to start tcp listener");
@@ -261,7 +264,7 @@ async fn process_start_message(tx: mpsc::Sender<Simulation>, num_orders: usize, 
   }
 }
 
-async fn upload_handler(State(session_manager): State<UploadSessionManager>, body: Bytes) -> Result<Json<UploadResponse>, UploadError> {
+async fn small_upload_handler(State(session_manager): State<UploadSessionManager>, body: Bytes) -> Result<Json<UploadResponse>, UploadError> {
   
   //println!("User uploaded file.");
   let payload = match <UploadRequest>::deserialize(&mut rmp_serde::Deserializer::new(&body[..])) {
@@ -362,5 +365,16 @@ async fn upload_handler(State(session_manager): State<UploadSessionManager>, bod
       }  
     },
     _ => return Err(UploadError::InvalidChunk)
+  }
+}
+
+async fn large_upload_handler(mut multipart: Multipart) {
+  while let Some(field) = multipart.next_field().await.unwrap() {
+    let name = field.name().unwrap().to_string();
+    //let data_txt = field.text().await.unwrap();
+    let data_bytes = field.bytes().await.unwrap();
+
+    // println!("uploaded data `{:?}` has textized data: {:?}", name, &data_txt);
+    println!("Length of `{}` is {} bytes", name, data_bytes.len());
   }
 }
