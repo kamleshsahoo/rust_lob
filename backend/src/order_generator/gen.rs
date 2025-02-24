@@ -1,4 +1,4 @@
-use std::{mem, str::FromStr, time::Instant};
+use std::{str::FromStr, time::Instant};
 // use chrono::{DateTime, Utc};
 use rand::{rngs::StdRng, SeedableRng};
 use rand_distr::{Bernoulli, Distribution, Normal, Uniform};
@@ -7,51 +7,28 @@ use serde::Serialize;
 
 use crate::engine::orderbook::{Arena, BidOrAsk, ExecutedOrders};
 
-/* TODO: May Remove
-struct RateLimiter {
-  last_update: Instant,
-  update_interval: Duration
-}
-
-impl RateLimiter {
-  fn new(update_frequency: Duration) -> Self {
-    RateLimiter { last_update: Instant::now(), update_interval: update_frequency }
-  }
-
-  fn should_update(&mut self) -> bool {
-    let now = Instant::now();
-    if now.duration_since(self.last_update) >= self.update_interval {
-      self.last_update = now;
-      true
-    } else {
-      false
-    }
-  }
-}
-*/
-
 #[derive(Debug, Serialize)]
 // #[serde(tag = "type")]
 pub enum ServerMessage {
   PriceLevels { snapshot: bool, bids: Vec<(Decimal, u64)>, asks: Vec<(Decimal, u64)> },
   Trades (Vec<ExecutedOrders>),
-  // EngineStats(Vec<EngineStats>)
-  ExecutionStats (Vec<EngineStats>),
-  BestLevels {best_buy: Option<Decimal>, best_sell: Option<Decimal>}
+  ExecutionStats (EngineStats),
+  BestLevels {best_buy: Option<Decimal>, best_sell: Option<Decimal>},
+  Completed
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct EngineStats {
-  order_type: String,
-  latency: i64,
-  avl_rebalances: i64,
-  executed_orders_cnt: usize
+  pub order_type: String,
+  pub latency: i64,
+  pub avl_rebalances: i64,
+  pub executed_orders_cnt: usize
 }
 
 pub struct Simulator {
   // symbol: String,
   // sequence_number: u64,
-  book : Arena,
+  pub book : Arena,
   engine_stats: Vec<EngineStats>,
   rng: StdRng,
   order_id: u64,
@@ -73,19 +50,17 @@ impl Simulator {
     Simulator {
       book: Arena::new(best_price_lvls),
       engine_stats: Vec::new(),
-      //engine_stats_offset: 0,
-      //rng: thread_rng(),
-      rng: StdRng::from_entropy(),
+      rng: StdRng::from_os_rng(),
       order_id: 1,
       mean_limit_price: mean_price,
       sd_limit_price: sd_price,
-      order_type_dist: Uniform::new(0.0, 1.0),
+      order_type_dist: Uniform::new(0.0, 1.0).expect("error creating uniform dist for order type"),
       order_type_cuml_probs: action_probs.into_iter().scan(0.0, |acc, x| { 
         *acc += x;
         Some(*acc)
       }).collect(),
       price_dist: Normal::new(mean_price, sd_price).expect("error creating a normal distribution"),
-      qty_dist: Uniform::new(1, 1000),
+      qty_dist: Uniform::new(1, 1000).expect("error creating uniform dist for shares/qty"),
       side_dist: Bernoulli::new(0.5).expect("error creating bernoulii distr"),
       executed_orders_offset: 0,
     }
@@ -101,7 +76,6 @@ impl Simulator {
 
     if side {
       bid_or_ask = BidOrAsk::Bid;
-      // bid_or_ask_str = "Bid";
       let lowest_sell = self.book.lowest_sell.unwrap().to_f64().unwrap();
       loop {
         price = self.price_dist.sample(&mut self.rng);
@@ -111,7 +85,6 @@ impl Simulator {
       };
     } else {
       bid_or_ask = BidOrAsk::Ask;
-      // bid_or_ask_str = "Ask";
       let highest_buy = self.book.highest_buy.unwrap().to_f64().unwrap();
       loop {
         price = self.price_dist.sample(&mut self.rng);
@@ -224,7 +197,10 @@ impl Simulator {
   pub fn generate_updates(&mut self, idx: usize) -> Vec<ServerMessage>{
     
     let mut messages = Vec::new();
-
+    // always send the engine stats
+    let engine_stat = self.engine_stats.get(idx).expect("each order should have a execution stat!").clone();
+    messages.push(ServerMessage::ExecutionStats(engine_stat));
+    
     // sending top `n=1000` price levels 
     // NOTE: bids or asks may be empty vectors
     if (idx+1) % 100 == 0 {
@@ -232,24 +208,13 @@ impl Simulator {
       messages.push(price_levels);
     }
 
-    // we always send the engine stats
-    let engine_stat = self.engine_stats.get(idx).expect("each order should have a execution stat!").clone();
-    messages.push(ServerMessage::ExecutionStats(vec![engine_stat]));
-
     if idx % 100 == 0 {
       messages.push(ServerMessage::BestLevels { best_buy: self.book.highest_buy, best_sell: self.book.lowest_sell });
     }
 
     if let Some(trades) = self.book.get_executed_orders(&mut self.executed_orders_offset) {
       messages.push(ServerMessage::Trades(trades));
-    }
-
-    let msg_size = mem::size_of_val(&*messages);
-
-    if msg_size > 10_000 {
-      println!("size of messages: {:?}", msg_size);
-    }
-    
+    }  
     messages
   }
 }
