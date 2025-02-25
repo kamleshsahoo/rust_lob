@@ -1,15 +1,18 @@
 mod order_generator;
 mod engine;
+mod file_upload;
 
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
-use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, DefaultBodyLimit, Multipart, State, WebSocketUpgrade}, http::{HeaderValue, Method}, response::IntoResponse, routing::{any, post}, Json, Router};
+use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, DefaultBodyLimit, Multipart, State, WebSocketUpgrade}, http::{HeaderValue, Method, StatusCode}, response::IntoResponse, routing::{any, post}, Json, Router};
 use futures::lock::Mutex;
 use futures_util::{SinkExt, StreamExt};
-use order_generator::{gen::{ServerMessage, Simulator}, upload::{process_upload_orders, FileUploadOrderType, FinalStats, UploadError, UploadRequest, UploadResponse}};
 use serde::Deserialize;
 use tokio::{net::TcpListener, sync::mpsc, time::sleep};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
+
+use order_generator::gen::{ServerMessage, Simulator};
+use file_upload::{parser::parse_file_orders, upload::{process_uploaded_orders, FileUploadOrderType, FinalStats, LargeUploadResponse, UploadError, UploadRequest, UploadResponse}};
 
 type OrderSender = mpsc::Sender<Vec<FileUploadOrderType>>;
 type OrderReceiver = mpsc::Receiver<Vec<FileUploadOrderType>>;
@@ -86,7 +89,7 @@ impl UploadSessionManager {
           all_orders.extend(chunk);
           // process when all orders are recvd
           if all_orders.len() >= total_orders {
-            let result = process_upload_orders(all_orders).await;
+            let result = process_uploaded_orders(all_orders).await;
             result_tx.send(result).await.expect("failed to send final result on channel!");
             break;
           }
@@ -368,13 +371,44 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
   }
 }
 
-async fn large_upload_handler(mut multipart: Multipart) {
-  while let Some(field) = multipart.next_field().await.unwrap() {
-    let name = field.name().unwrap().to_string();
-    //let data_txt = field.text().await.unwrap();
-    let data_bytes = field.bytes().await.unwrap();
+async fn large_upload_handler(mut multipart: Multipart) -> Result<Json<LargeUploadResponse>, (StatusCode, String)> {
 
-    // println!("uploaded data `{:?}` has textized data: {:?}", name, &data_txt);
-    println!("Length of `{}` is {} bytes", name, data_bytes.len());
+  let mut result = None;
+  let mut parse_duration = Duration::default();
+  let mut total_raw_orders = 0;
+  let mut invalid_orders = 0;
+
+  if let Some(field) = multipart.next_field().await.map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))? {
+    let file_contents = field.text().await.map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+
+    let (parsed_orders, duration, raw_cnt, invalid_cnt) = parse_file_orders(file_contents);
+    parse_duration = duration;
+    total_raw_orders = raw_cnt;
+    invalid_orders = invalid_cnt;
+    result = Some(process_uploaded_orders(parsed_orders).await);
+  } else {
+    return Err((StatusCode::BAD_REQUEST, "No file found".to_string()));
   }
+
+  let orderbook_results = result.ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Failed to process orders".to_string()))?;
+  
+  Ok(Json(LargeUploadResponse {
+    orderbook_results,
+    parse_results: (parse_duration, total_raw_orders, invalid_orders)
+  }))
 }
+  
+/*
+while let Some(field) = multipart.next_field().await.unwrap() {
+  let name = field.name().unwrap().to_string();
+  let file_contents = field.text().await.unwrap();
+  //let data_bytes = field.bytes().await.unwrap();
+  // println!("uploaded data `{:?}` has textized data: {:?}", name, &data_txt);
+  // println!("Length of `{}` is {} bytes", name, data_bytes.len());
+  let (parsed_orders, parse_duration, total_raw_orders, invalid_orders) = parse_file_orders(file_contents);
+
+  let result = process_uploaded_orders(parsed_orders).await;
+
+  return ;
+}
+*/
