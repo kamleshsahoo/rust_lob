@@ -1,10 +1,15 @@
 use dioxus::prelude::*;
 
+use crate::Route;
+
+static RUST_ICON: Asset = asset!("/assets/rust-logo-64x64.png");
+static CSS: Asset = asset!("assets/docs.css");
+
 #[component]
 pub fn Docs() -> Element {
   // const ROCKET: Asset = asset!("/assets/rocket.svg");
-  static CSS: Asset = asset!("assets/docs.css");
-  const RUST_ICON: Asset = asset!("/assets/rust-logo-64x64.png");
+  // static CSS: Asset = asset!("assets/docs.css");
+  // const RUST_ICON: Asset = asset!("/assets/rust-logo-64x64.png");
 
   rsx! {
     document::Stylesheet {href: CSS},
@@ -12,11 +17,13 @@ pub fn Docs() -> Element {
       class: "docs",
       div {
         class: "docs-header", 
-        h1 { "Building a Real-Time Order Book in " },
-        img { 
-          src: RUST_ICON,
-          alt: "Rust icon",
-          class: "rust-logo"
+        h1 { 
+          "Building a Real-Time Order Book in ",
+          img { 
+            src: RUST_ICON,
+            alt: "Rust icon",
+            class: "rust-logo"
+          }
         }
       },
       section {
@@ -332,6 +339,650 @@ pub fn Docs() -> Element {
         p { 
           "With all the DevOps and data engineering battles fought (for now), it’s finally time to make things look pretty. Up next: building our real-time trading UI with Dioxus. Because what's the point of a blazing-fast order book if it isn’t wrapped in a sleek, intuitive interface?🚀"
         }
+      }
+    }
+  }
+}
+
+#[component]
+pub fn FrontDocs() -> Element {
+
+  const REACT_SNIPPET1: &str = "export default function Header() {
+  return (<h1>Limit Orderbook Dashboard</h1>;);
+}";
+
+  rsx!{
+    document::Stylesheet {href: CSS},
+    div {
+      class: "docs", 
+      div {
+        class: "docs-header", 
+        h1 { 
+          "Building a Real-Time Orderbook - Part 2: The Frontend",
+          // img { 
+          //   src: RUST_ICON,
+          //   alt: "Rust icon",
+          //   class: "rust-logo"
+          // }
+        }
+        p {
+          "Welcome back, fellow coders! This is the second (and final) installment of our journey to build a real-time limit orderbook application. If you missed the first part, where we set up the backend server, I highly recommend you check it out "
+          Link {
+            to: Route::Docs { },
+            "here."
+          } 
+          " But don’t worry, I’ll give you a quick recap."
+        }
+      },
+      section { 
+        h2 { "Recap: The Backend" }
+        p {
+          "In Part 1, we built a performant backend server in Rust that provides two main API endpoints: a WebSocket for real-time data updates and a simple POST request for order submissions. Now, it’s time to build the frontend—the part of the application that users will interact with."
+        }
+      }
+      section {
+        h2 { "Building Blocks of the Web" } 
+        p { 
+          "At its core, every website we see today is just a glorified, well-dressed HTML page. "
+          strong{"HTML"} 
+          " ("
+          em {"HyperText Markup Language"}
+          ") is the backbone that defines the content and structure of a website—think of it as the skeleton. But a skeleton alone isn’t much to look at. That’s where "
+          strong{"CSS"}
+          " ("
+          i {"Cascading Style Sheets"}
+          ") comes in, giving our web pages the much-needed—colors, layouts, animations, and all the fancy design elements. And then the final piece—"
+          strong{"JavaScript"}
+          ", which adds interactivity, making our pages dynamic, like fetching your order total when you click that "
+          em{"Checkout"}
+          " button (or reminding you that you probably don’t need that 10th GPU in your cart)."
+        }
+        p {
+          "If you're curious about how web standards evolved and who ensures they don’t spiral into chaos, you can read about the HTML living standard "
+          a {
+            href: "https://html.spec.whatwg.org/multipage/introduction.html#is-this-html5?",
+            target: "_blank",
+            "here"
+          }
+          " maintained by "
+          strong{"WHATWG"}
+          "—an association of major browser vendors (Apple, Google, Mozilla, and Microsoft). But if you’re just looking to start building without diving into the history books, "
+          a {
+            href: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Structuring_content",
+            target: "_blank",
+            "MDN Docs"
+          }
+          " are your best friend—it’s packed with everything you need to get started with minimal programming knowledge."
+        }
+        p {
+          "Now, modern websites aren’t just built with raw "
+          i {"HTML"}
+          ", "
+          i {"CSS"}
+          ", and "
+          i {"JavaScript"}
+          ". We have a flood of frameworks and libraries that make development easier and more powerful. For styling, we have "
+          strong {"Tailwind CSS"}
+          ", "
+          strong {"Bootstrap"}
+          ", and many others. For interactivity and state management, we have JavaScript frameworks like "
+          i {"React"}
+          ", " 
+          i {"Vue"}
+          ", and "
+          i {"Svelte"}
+          " that let us build complex, scalable applications with relative ease, but they all boil down to the three core web technologies we talked at the start. With all that in mind, it was time to choose the right tools for my orderbook web app. Since I had already built my backend in Rust, wouldn't it be awesome if I could write my frontend in Rust too? Spoiler alert: "
+          strong {"Yes, it would!💫"}
+        }
+      }
+      section {
+        h2 { "Dioxus: Supercharging Frontend with Rust" },
+        p { "Given that my backend was already in Rust, the thought of maintaining a separate JavaScript-based frontend didn’t exactly light up my day—why let go of Rust’s speed and the sheer joy of writing it? "
+        strong { "Dioxus" }
+        ", does exactly that and more! Dioxus, lets you write your frontend entirely in Rust (okay, maybe with a sprinkle of JavaScript here and there)." }
+
+        p {
+          "But Dioxus isn’t just about convenience; it’s about power. "
+          em {"WebAssembly"}
+          " or " 
+          em {"WASM"}
+          " frameworks like Dioxus enable us to build scalable, performant, and production-ready web applications—all in Rust. And here's the best part—"
+          strong {"Dioxus lets you build and ship applications for web, desktop, and mobile platforms using the same codebase!"} 
+          " How cool is that? If that made you curious, check out the "
+          a {
+            href: "https://dioxuslabs.com/",
+            target: "_blank",
+            "Dioxus docs"
+          }
+          "."
+          //" if you're curious🚀"
+        }
+        p {
+          "Other Rust-based web and UI frameworks like "
+          i {"Leptos"}
+          ", "
+          i {"Yew"}
+          ", and "
+          i {"Iced"}
+          " are also gaining traction, each with its own strengths. The Rust frontend ecosystem may still be evolving, but it's already proving to be a serious contender in the world of web development."
+        }
+        p {
+          "And with that, my tech stack decisions were set—Rust on the backend, Rust on the frontend, and a whole lot of fun ahead!🚀"
+        }
+      }
+      section { 
+        h2 { "Page Components and Reactivity" }
+        p {
+          "Once the Dioxus setup was complete (you can find the step-by-step guide "
+          a {
+            href: "https://dioxuslabs.com/learn/0.6/getting_started/#",
+            target: "_blank",
+            "here"
+          }
+          "), it was time to actually build something. Coming from "
+          i {"React"}
+          " and "
+          i {"Next.js"}
+          ", I was used to "
+          em {"JSX/TSX"}
+          " extensions, along with the dynamic duo of "
+          code {"useState"}
+          " and "
+          code {"useEffect"}
+          ". "
+          em {"JSX"}
+          " is a syntax extension that lets you write HTML inside your JavaScript code, while "
+          code {"useState"}
+          " helps manage component state—like showing an order total when a user clicks "
+          i {"Checkout"}
+          "."
+        },
+        p {
+          "Other frameworks take different approaches to state management. "
+          em {"Vue"}
+          " has "
+          code {"ref()"}
+          ", " 
+          em {"Solid.js"}
+          " has "
+          code {"createSignal"}
+          ", and "
+          em {"Svelte"}
+          " keeps things simple with "
+          code {"$state"}
+          ". Dioxus, combines the best of all these frameworks into its ergonomic state management system while keeping things familiar for React devs."
+        }
+        p {
+          "For example, in "
+          em { "React" },
+          ", I will write a header component like this: "
+          pre { 
+            class: "js-code",
+            code {
+              span { 
+                class: "comment",
+                "// React component"
+              }
+              span { 
+                class: "keyword",
+"
+ export default function"
+              }
+              " Header () {{ "
+              span {
+                class: "keyword",
+    "
+    return "
+              }
+              "("
+              span { 
+                class: "keyword",
+                "<h1>"
+              }
+              span {
+                class: "string",
+                "My WebPage Header"
+              },
+              span { 
+                class: "keyword",
+                "</h1>"
+              }
+              ");
+ }}"
+            }
+          }
+        "In "
+        em { "Dioxus" }
+        ", the equivalent would be:"
+        pre { 
+          class: "rust-code",
+          code {
+            span { 
+              class: "comment",
+              "// Dioxus component"
+            }
+            span { 
+              class: "keyword",
+"
+#[component]
+pub fn"
+            }
+            " Header () -> "
+            span { 
+              class: "keyword",
+              "Element"
+            },
+            " {{"
+            span {
+              class: "keyword",
+  "
+  rsx!"
+            }
+            " {{ ",
+            span {
+              class: "keyword",
+              "h1"
+            },
+            " {{ "
+            span {
+              class: "string",
+              r#""My WebPage Header""#
+            }
+            " }} }}",
+          }
+        }
+          "See the similarities? Both require returning a single root element and follow the same general principles (you can dive deeper into the Dioxus docs for the nitty-gritty details)."
+        }
+        p {
+          "State management in Dioxus is also similar to React. Instead of "
+          code {"useState"}
+          ", " 
+          em { "Dioxus" }
+          " uses " 
+          code {"use_signal"}
+          " like so:"
+          pre { 
+            class: "rust-code",
+            code {
+              span { 
+                class: "comment",
+                "// Dioxus states with use_signal()"
+              }
+              span { 
+                class: "keyword",
+                "
+ let mut"
+              }
+              " user_clicked: "
+              span { 
+                class: "keyword",
+                "Signal<bool>"
+              },
+              " = "
+              span {
+                class: "keyword",
+                "use_signal"
+              }
+              "(|| ",
+              span {
+                class: "keyword",
+                "false"
+              },
+              ");"
+              span {
+                class: "keyword",
+                "
+
+ fn"
+              }
+              " click_handler() {{
+    user_clicked."
+              span { 
+                class: "keyword",
+                "set"
+              }
+              "("
+              span {
+                class: "keyword",
+                "true"
+              }
+              ");"
+              span { 
+                class: "comment",
+                "
+    // ..."
+              }
+              "
+ }}"
+            }
+          }
+          "In Dioxus, "
+          code {"use_signal"}
+          " is the equivalent of React’s "
+          code {"useState"}
+          ", keeping things reactive while embracing Rust’s functional paradigm."
+        }
+      }
+      section {
+        h2 { "Routing: Enum-Based Simplicity" }
+        p { "Dioxus takes a different approach to routing—no file or folder-based routing madness here. Instead, routes are defined as an "
+        code {"enum"}
+        " where each variant represents a path in your app. That means one can "
+        em {"nest routes"}
+        ", " 
+        em {"apply layouts"}
+        ", and " 
+        em {"handle dynamic paths"}
+        " with pure Rust enums." }
+        p {
+          "Here’s how our app’s router is structured:"
+          pre {
+            class: "rust-code",
+            code{
+              span {
+                class: "comment",
+                "// Dioxus routing"
+              }
+              span { 
+                class: "keyword",
+                "
+  #[derive"
+              }
+              "("
+              span { 
+                class: "keyword",
+                "Routable"
+              }
+              ", "
+              span { 
+                class: "keyword",
+                "PartialEq"
+              }
+              ", "
+              span { 
+                class: "keyword",
+                "Clone"
+              }
+              ")"
+              span {class: "keyword", "]"}
+              span { 
+                class: "keyword",
+                "
+  enum"
+              }
+              " Route {{"
+              span { 
+                class: "keyword",
+                "
+      #[layout"
+              }
+              "(Template)"
+              span { 
+                class: "keyword",
+                "]
+      #[route"
+              }
+              "("
+              span { 
+                class: "string",
+                r#""/""#
+              }
+              ")"
+              span {class: "keyword", "]"}
+      "
+      Home {{ }}"
+              span {
+                class: "keyword",
+                "
+      #[nest"
+              }
+              "("
+              span {
+                class: "string",
+                "/docs"
+              }
+              ")"
+              span { 
+                class: "keyword",
+                "]
+          #[route"
+              }
+              "("
+              span { 
+                class: "string",
+                r#""/""#
+              }
+              ")"
+              span {class: "keyword", "]"}
+          "
+          Docs {{ }}"
+              span { 
+                class: "keyword",
+                "
+          #[route"
+              }
+              "("
+              span { 
+                class: "string",
+                r#""/front""#
+              }
+              ")"
+              span {class: "keyword", "]"}
+          "
+          FrontDocs {{ }}"
+              span { 
+                class: "keyword",
+                "
+      #[route"
+              }
+              "("
+              span { 
+                class: "string",
+                r#""/simulator""#
+              }
+              ")"
+              span {class: "keyword", "]"}
+      "
+      Simulator {{ }}"
+              span { 
+                class: "keyword",
+                "
+      #[route"
+              }
+              "("
+              span { 
+                class: "string",
+                r#""/:..route""#
+              }
+              ")"
+              span {class: "keyword", "]"}
+      "
+      PageNotFound {{ route: "
+              span {
+                class: "keyword",
+                "Vec<String>"
+              }
+              " }}
+  }}"
+            }
+          }
+        }
+        p {
+          "For React devs, this should feel somewhat familiar—it’s like "
+          em {"react-router"} 
+          " but with more type safety and control. For example, navigating to "
+          code {"/docs"}
+          " serves our backend documentation, while "
+          code {"/simulator"}
+          " loads our trading simulator. "
+          i {"No unnecessary boilerplate, just a clean and flexible routing system."}" This approach to routing is incredibly powerful. Instead of being locked into directory structures, we define routes programmatically, making it easy to scale, apply dynamic parameters, and nest layouts as needed."
+        }
+      }
+      section {
+        h2 { "Building the Simulator Page" }
+        p {
+          "The simulation dashboard is the heart of our frontend application. It allows users to interact with the backend engine we built in Part 1. This is where users can "
+          i {"run simulations and interact with the order book engine"} 
+          " in real time."
+          br {}
+          "I structured the simulation dashboard into two main modes:"
+        }
+        h3 {"1. Simulation Mode"}
+        p {
+          "In this mode, users can run a simulated limit order book with "
+          i {"synthetically generated orders"}
+          ", customized using user-defined parameters. The results are streamed in real time and visualized through:"
+          ul {
+            li { strong {"A live order book table"} },
+            li { strong {"Dynamic graphs"} },
+            li { strong {"Real-time statistics"} },
+          }
+        }
+        p {"Now, there are few things to consider here:"}
+        h4 { "a. Handling WebSocket Updates Efficiently" }
+        p {
+          "We needed a way to process and display incoming server updates smoothly. This meant:"
+          ul {
+            li { strong {"Receiving real-time updates"} " via a WebSocket connection." }
+            li { strong {"Displaying them seamlessly"} " without causing UI lag." }
+          }
+        }
+        p {
+          "To achieve this, we leveraged Dioxus' "
+          em {"asynchronous hooks"}
+          ", specifically "
+          code {"spawn"}
+          " and "
+          code {"use_coroutine"}
+          ". These allow us to handle asynchronous tasks, like maintaining a persistent WebSocket connection. Rust's "
+          em {"async"}
+          " model really shines here—one task continuously "
+          i {"listens for updates"}
+          " from the WebSocket, while a second task "
+          i {"updates the UI state"}
+          ", ensuring our graphs, order book table, and statistics reflect the latest data. The two tasks communicate via "
+          strong {"channels"}
+          ", similar to how our backend order generator interacts with the WebSocket sender."
+        }
+        h4 { "b. Throttling Updates for Performance" }
+        p {
+          "Our backend engine processes orders at "
+          i { "millions of transactions per second" }
+          ". While this is great, two issues arise:"
+          ul {
+            li { 
+              "The WebSocket "
+              strong {"can't handle that much traffic"}
+              "—too many updates could cause connection drops." }
+            li { 
+              "Even if we could process every update, "
+              strong {"humans can't perceive more than ~60 updates per second"}
+              " (60 fps), which is a frame every "
+              strong { "16 milliseconds" }
+              "."
+            }
+          }
+        }
+        p {
+          "So, we throttle incoming updates using a "
+          em {"signal"}
+          " that tracks whether an update is needed. For instance, our real-time "
+          strong {"3D graphs"}
+          " update at a set interval (e.g., every 50ms) to maintain performance "
+          i {"without overwhelming the UI"}
+          "."
+        }
+        h4 { "c. Choosing the Right Graphing Library" }
+        p {
+          "We intially experimented with  "
+          a { 
+            href: "https://crates.io/crates/plotters",
+            target: "_blank",
+            "Plotters"
+          }
+          ", but later moved to "
+          em {"Apache ECharts"}
+          " a web-based visualization library with Rust bindings via the "
+          a {
+            href: "https://crates.io/crates/charming",
+            target: "_blank",
+            "charming"
+          }
+          " crate. It provides more interactive and visually appealing graphs, making real-time data representation seamless. Regardless of the library, the approach remains the same—our "
+          em {"HTML"}
+          " "
+          code {"canvas"}
+          " element renders the graphs, and as long as we keep updating the data at regular intervals, we get fluid real-time visualizations."
+        }
+        h3 {"2. File Upload Mode"}
+        p { "Unlike the simulation mode, this mode is designed for users to upload their own order book data and analyze it."}
+        p {
+          "Here’s how it works:"
+          ul {
+            li { 
+              "Users upload a "
+              i {".txt"}
+              " file containing order data in a predefined format." },
+            li { "The file is parsed and validated on the client side." },
+            li { 
+              "Orders not following the format are ignored, and a preview table displays the top and bottom 5 valid rows. (If the file has more than 10 rows, ellipsis rows are added to indicate more data exists.)"
+            }
+          }
+        }
+        h4 { "a. Handling Large Files Efficiently" }
+        p {
+          "There were two critical challenges here:"
+          ol {
+            li { 
+              strong{"Client-side parsing performance"}
+              ul { 
+                li { "For files up to 2MB, parsing happens entirely in the browser, meaning it works even if our backend server is down."},
+                li { "Thanks to Dioxus' WASM runtime, this is blazing fast—I tested a 10-million-order file, and the parsed preview table loaded in about ~8 seconds🚀" }
+              }
+            }
+            li {
+              strong {"Uploading Large Order Books Efficiently"}
+              ul {
+                li { 
+                  "Once parsed, the file is sent to the server via "
+                  strong {"POST"}
+                  " request"
+                },
+                li { "To prevent blocking the main UI thread, we chunk large files into smaller 10,000-order packets." },
+                li { "The backend collects these chunks and feeds them into the order book engine once all packets are received." }
+              }
+            }
+          }
+        }
+        p {
+          "Our first naive approach worked… but at a cost. Since the entire processing happened in one go, the UI froze during uploads. Not great!"
+        }
+        h4 { "b. Fixing UI Freezes: Smart Upload Handling" }
+        p {
+          "To prevent UI crashes, we explored solutions like "
+          em {"Web Workers"}
+          ", but ultimately settled on a simpler fix:"
+          ul { 
+            li { 
+              i {"Limit client-side validation to 2MB files"}
+              "."
+            },
+            li { 
+              i {"Larger files are sent directly to the backend server"}
+              ", avoiding client-side memory overload."
+            }
+          }
+        }
+        p {
+          "This strikes a balance—users still get "
+          strong {"instant validation"}
+          " for small datasets, while larger datasets "
+          strong {"offload processing"}
+          " to the backend."
+        }
+      }
+      section { 
+        h2 { "Conclusion" }
       }
     }
   }
