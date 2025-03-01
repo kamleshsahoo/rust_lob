@@ -3,10 +3,11 @@ mod engine;
 mod file_upload;
 
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
-use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, DefaultBodyLimit, Multipart, State, WebSocketUpgrade}, http::{HeaderValue, Method, StatusCode}, response::IntoResponse, routing::{any, post}, Json, Router};
+use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, DefaultBodyLimit, Multipart, State, WebSocketUpgrade}, http::{HeaderValue, Method, StatusCode}, response::IntoResponse, routing::{any, post, get}, Json, Router};
 use futures::lock::Mutex;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
+use serde_json::json;
 use tokio::{net::TcpListener, sync::mpsc, time::sleep};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
@@ -121,6 +122,7 @@ async fn main() {
   // .allow_headers([CONTENT_TYPE]);
     
   let app = Router::new()
+  .route("/health", get(health_check_handler))
   .route("/wslob", any(ws_handler))
   .route("/smallupload", post(small_upload_handler).with_state(session_manager))
   .route("/largeupload", post(large_upload_handler).layer(DefaultBodyLimit::max(MAX_FILE_SIZE)))
@@ -130,6 +132,10 @@ async fn main() {
   let listener = TcpListener::bind("0.0.0.0:7575").await.expect("failed to start tcp listener");
 
   axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.expect("failed to start server");
+}
+
+async fn health_check_handler() -> Json<serde_json::Value> {
+  Json(json!({"code":200, "status": "healthy"}))
 }
 
 async fn ws_handler (ws: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl IntoResponse {
@@ -165,8 +171,6 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
                },
                ClientMessage::Stop => {
                 println!(">>> {} requested STOP", who);
-                
-
                 break;
                }
               }
@@ -397,18 +401,3 @@ async fn large_upload_handler(mut multipart: Multipart) -> Result<Json<LargeUplo
     parse_results: (parse_duration, total_raw_orders, invalid_orders)
   }))
 }
-  
-/*
-while let Some(field) = multipart.next_field().await.unwrap() {
-  let name = field.name().unwrap().to_string();
-  let file_contents = field.text().await.unwrap();
-  //let data_bytes = field.bytes().await.unwrap();
-  // println!("uploaded data `{:?}` has textized data: {:?}", name, &data_txt);
-  // println!("Length of `{}` is {} bytes", name, data_bytes.len());
-  let (parsed_orders, parse_duration, total_raw_orders, invalid_orders) = parse_file_orders(file_contents);
-
-  let result = process_uploaded_orders(parsed_orders).await;
-
-  return ;
-}
-*/
