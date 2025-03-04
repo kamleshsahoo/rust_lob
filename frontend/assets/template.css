@@ -163,12 +163,33 @@ footer {
 }
 
 @media screen and (max-width: 568px) {
+  .menu-button {
+    display: block;
+  }
   .nav-links {
+    position: fixed;
+    top: 65px;
+    left: 0;
+    width: 100%;
+    flex-direction: column;
+    background-color: var(--bg-secondary); 
+    padding: 10px;
+    gap: 5px;
+    /* box-shadow: 0 5px 10px rgba(0, 0, 0, 0.2); */
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+    /* transition: transform 0.3s ease, opacity 0.3s ease; */
     display: none;
   }
-  .menu-button {
+
+  .nav-links.active {
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: all;
     display: flex;
   }
+
   .footer-container {
     flex-direction: column;
     gap: 10px;
