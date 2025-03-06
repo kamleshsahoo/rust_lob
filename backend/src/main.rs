@@ -1,26 +1,33 @@
 mod order_generator;
 mod engine;
 mod file_upload;
+// mod cloud_auth;
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
-use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, DefaultBodyLimit, Multipart, State, WebSocketUpgrade}, http::{HeaderValue, Method, StatusCode}, response::IntoResponse, routing::{any, post, get}, Json, Router};
+use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
+use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, DefaultBodyLimit, Multipart, State, WebSocketUpgrade}, http::{header::CONTENT_TYPE, HeaderValue, Method, StatusCode}, response::IntoResponse, routing::{any, get, post}, Json, Router};
+// use cloud_auth::auth::{get_signed_url, MySignedURLOptions};
 use futures::lock::Mutex;
 use futures_util::{SinkExt, StreamExt};
+
+// use ::google_cloud_auth::credentials::create_access_token_credential;
+// use google_cloud_storage::{client::{Client, ClientConfig}, http::objects::{download::Range, get::GetObjectRequest}, sign::{self, SignedURLMethod, SignedURLOptions}};
+// use google_cloud_token::TokenSourceProvider;
+// use google_cloud_auth::project::Config;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::mpsc, time::sleep};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
 use order_generator::gen::{ServerMessage, Simulator};
-use file_upload::{parser::parse_file_orders, upload::{process_uploaded_orders, FileUploadOrderType, FinalStats, LargeUploadResponse, UploadError, UploadRequest, UploadResponse}};
+use file_upload::{parser::parse_file_orders, upload::{process_uploaded_orders, FileUploadOrderType, FinalStats, LargeUploadRequest, LargeUploadResponse, LargeUploadSessionManager, UploadError, UploadRequest, UploadResponse}};
 
 type OrderSender = mpsc::Sender<Vec<FileUploadOrderType>>;
 type OrderReceiver = mpsc::Receiver<Vec<FileUploadOrderType>>;
 type ResultSender = mpsc::Sender<HashMap<String, FinalStats>>;
 type ResultReceiver = mpsc::Receiver<HashMap<String, FinalStats>>;
-// allow max file uploads of 300MB for the /largeupload route
-const MAX_FILE_SIZE: usize = 1024 * 1024 * 300;
+// allow max file uploads of 10MB for the /largeupload route
+const MAX_FILE_SIZE: usize = 1024 * 1024 * 30;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -34,6 +41,7 @@ enum ClientMessage {
       best_price_levels: bool // whether to show best bids and asks, defaults to false
   },
   Stop,
+  Ack
 }
 
 enum Simulation {
@@ -49,6 +57,11 @@ struct FileUploadSessionData {
   total_chunks: usize,
   total_orders: usize,
   processed_chunks: usize
+}
+
+#[derive(Deserialize)]
+struct GenerateSignedUrlRequest {
+    file_name: String,
 }
 
 #[derive(Clone)]
@@ -91,7 +104,7 @@ impl UploadSessionManager {
           // process when all orders are recvd
           if all_orders.len() >= total_orders {
             let result = process_uploaded_orders(all_orders).await;
-            result_tx.send(result).await.expect("failed to send final result on channel!");
+            result_tx.send(result).await.expect("failed to send final result for smallfile on channel!");
             break;
           }
         }
@@ -114,18 +127,27 @@ impl UploadSessionManager {
 #[tokio::main]
 async fn main() {
 
-  let session_manager = UploadSessionManager::new();
+  let small_upload_session_manager = UploadSessionManager::new();
+  let large_upload_session_manager = LargeUploadSessionManager::new();
 
   let cors = CorsLayer::new()
   .allow_methods([Method::GET, Method::POST])
-  .allow_origin("http://127.0.0.1:8080".parse::<HeaderValue>().unwrap());
-  // .allow_headers([CONTENT_TYPE]);
+  //.allow_origin("http://127.0.0.1:8080".parse::<HeaderValue>().unwrap())
+  .allow_origin(Any)
+  .allow_headers([CONTENT_TYPE]);
     
   let app = Router::new()
   .route("/health", get(health_check_handler))
+  // .route("/generate-url", post(generate_signed_url))
+  // .route("/process-file", post(process_file))
   .route("/wslob", any(ws_handler))
-  .route("/smallupload", post(small_upload_handler).with_state(session_manager))
-  .route("/largeupload", post(large_upload_handler).layer(DefaultBodyLimit::max(MAX_FILE_SIZE)))
+  .route("/smallupload", post(small_upload_handler)
+                        .with_state(small_upload_session_manager)
+        )
+  .route("/largeupload", post(large_upload_handler_v2)
+                        .layer(DefaultBodyLimit::max(MAX_FILE_SIZE))
+                        .with_state(large_upload_session_manager)
+        )
   // .with_state(session_manager)
   .layer(cors);
 
@@ -172,6 +194,10 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
                ClientMessage::Stop => {
                 println!(">>> {} requested STOP", who);
                 break;
+               },
+               ClientMessage::Ack => {
+                println!(">>> {} sent simulation completion ack", who);
+                break;
                }
               }
             },
@@ -190,7 +216,6 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
         
         match msg {
           Simulation::Complete => {
-            println!("Simulation complete. Closing the simulation channel and droping the socket connection");
             if !batch.is_empty() {
               println!("sending rem updates: {:?}", &batch.len());
               let update_msg = Message::text(serde_json::to_string(&batch).expect("serializing final server updates failed!"));
@@ -198,14 +223,24 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
                 break;
               }
             }
-            rx.close();
-
+  
             let completion_signal = ServerMessage::Completed;
             let completion_msg = Message::text(serde_json::to_string(&vec![[completion_signal]]).expect("serializing simulation completion signal failed!"));
-            if sender.send(completion_msg).await.is_err() {
-              println!("sending simulation completion signal to dioxus failed!");
+
+            if let Err(e) = sender.send(completion_msg).await {
+              println!("sending simulation completion signal to dioxus failed: {:?}", e);
+              break;
+            } else {
+              println!("Successfully sent completion signal")
             }
-            break;
+
+            //tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // if sender.close().await.is_err() {
+            //   println!("closing connection failed!")
+            // }
+            // rx.close();
+            // break;
           },
           Simulation::Start(snapshot) => {
             // << Send intial snapshot to WebSocket Client immediately >>
@@ -264,7 +299,7 @@ async fn process_start_message(tx: mpsc::Sender<Simulation>, num_orders: usize, 
     };
   }
   //println!("trades: {:?}", simulator.book.executed_orders);
-  println!("[INFO] Completed simulation (total trades: {:?}), sending close frame to channel", simulator.book.executed_orders.len());
+  println!("[INFO] Completed simulation (total trades: {:?})", simulator.book.executed_orders.len());
 
   if tx.send(Simulation::Complete).await.is_err() { 
     panic!("Could not send close signal to channel after simulation was complete!");
@@ -277,7 +312,7 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
   let payload = match <UploadRequest>::deserialize(&mut rmp_serde::Deserializer::new(&body[..])) {
     Ok(de_payload) => de_payload,
     Err(e) => {
-      println!("couldnot deserialize the client file orders: {:?}", e);
+      println!("couldnot deserialize the small file upload request: {:?}", e);
       return Err(UploadError::DeserializeError(e.to_string()))
     }
   };
@@ -292,7 +327,7 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
       let order_tx = session_manager.create_session(session_id.clone(), payload.total_chunks, payload.total_orders).await;
       // let total_orders = payload.total_orders;
       if let Err(e) = order_tx.send(payload.orders).await {
-        println!("sending 1st chunk on channel failed!");
+        println!("sending 1st small file orders chunk on channel failed!");
         return Err(UploadError::ChannelError(e.to_string()));
       }
 
@@ -316,7 +351,7 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
                   }
                 ));
               },
-              None => return Err(UploadError::ChannelError("sender dropped when receiving the final result".to_string()))
+              None => return Err(UploadError::ChannelError("sender dropped somehow when receiving the final result for small file uplaod".to_string()))
             }
           },
           None => return Err(UploadError::SessionNotFound)
@@ -329,9 +364,9 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
       let result_receiver = session_manager.take_result_receiver(&session_id).await;
       match (order_sender, result_receiver) {
         (Some(sender), Some(mut rcvr)) => {
-          // send the final chunk
+          // send the final chunk on channel
           if let Err(e) = sender.send(payload.orders).await {
-            println!("the mpsc orders receiver dropped");
+            println!("the receiver channel somehow dropped when sending the final chunk for small upload!");
             return Err(UploadError::ChannelError(e.to_string()));
           }
 
@@ -344,37 +379,36 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
                 }
               ));
             },
-            None => return Err(UploadError::ChannelError("sender dropped when receiving the final result".to_string()))
+            None => return Err(UploadError::ChannelError("sender channel somehow dropped when receiving the final result for small file upload".to_string()))
           }
         },
         _ => return Err(UploadError::SessionNotFound),
       } 
     },
     n if n < payload.total_chunks - 1 => {
-      // for subsequent chunks
+      // for all other chunks
       match session_manager.get_chunk_sender(&session_id).await {
-          Some(order_sender) => {
-            if let Err(e) = order_sender.send(payload.orders).await {
-              println!("the mpsc orders receiver dropped");
-              return Err(UploadError::ChannelError(e.to_string()));
-            };
-            return Ok(
-              Json(
-                UploadResponse {
-                  data: None,
-                  session_id: Some(session_id),
-                }
-              ));
+        Some(order_sender) => {
+          if let Err(e) = order_sender.send(payload.orders).await {
+            println!("small file upload receiver channel somehow dropped");
+            return Err(UploadError::ChannelError(e.to_string()));
+          };
+          return Ok(
+            Json(
+              UploadResponse {
+                data: None,
+                session_id: Some(session_id),
+              }
+            ));
           },
-          None => {
-            return Err(UploadError::SessionNotFound);
-          }
-      }  
-    },
+          None => return Err(UploadError::SessionNotFound)
+        }
+      },
     _ => return Err(UploadError::InvalidChunk)
   }
 }
 
+/* Working Ver - To be Deprecated
 async fn large_upload_handler(mut multipart: Multipart) -> Result<Json<LargeUploadResponse>, (StatusCode, String)> {
 
   let mut result = None;
@@ -401,3 +435,196 @@ async fn large_upload_handler(mut multipart: Multipart) -> Result<Json<LargeUplo
     parse_results: (parse_duration, total_raw_orders, invalid_orders)
   }))
 }
+*/
+
+async fn large_upload_handler_v2 (
+  State(session_manager): State<LargeUploadSessionManager>,
+  body: Bytes
+) -> Result<Json<LargeUploadResponse>, UploadError> {
+  
+  let payload = match <LargeUploadRequest>::deserialize(&mut rmp_serde::Deserializer::new(&body[..])) {
+    Ok(de_payload) => de_payload,
+    Err(e) => {
+      println!("couldnot deserialize the large file upload request: {:?}", e);
+      return Err(UploadError::DeserializeError(e.to_string()));
+    }
+  };
+
+  let session_id = match payload.session_id {
+    Some(id) => id,
+    None => Uuid::new_v4().to_string()
+  };
+
+  match payload.chunk_number {
+    0 => {
+      let chunk_tx = session_manager.create_session(session_id.clone(), payload.total_chunks).await;
+      if let Err(e) = chunk_tx.send(payload.chunk).await {
+        println!("sending 1st large file chunk on channel failed!");
+        return Err(UploadError::ChannelError(e.to_string()));     
+      }
+
+      // check for one and only chunk
+      if payload.total_chunks != 1 {
+        return Ok(Json(
+          LargeUploadResponse {
+            orderbook_results: None,
+            parse_results: None,
+            session_id: Some(session_id)
+          }
+        ));
+      } else {
+        match session_manager.take_result_receiver(&session_id).await {
+          Some(mut rcvr) => {
+            match rcvr.recv().await {
+              Some(res) => {
+                return Ok(Json(
+                  LargeUploadResponse {
+                    orderbook_results: Some(res.0),
+                    parse_results: Some(res.1),
+                    session_id: Some(session_id) }
+                ));
+              },
+              None => return Err(UploadError::ChannelError("sender dropped somehow when receiving the final result for large file upload".to_string()))
+            }
+          },
+          None => return Err(UploadError::SessionNotFound)
+        };
+      }
+    },
+    n if n == payload.total_chunks - 1 => {
+      // last chunk
+      let chunk_sender = session_manager.get_chunk_sender(&session_id).await;
+      let result_receiver = session_manager.take_result_receiver(&session_id).await;
+
+      match (chunk_sender, result_receiver) {
+        (Some(sender), Some(mut rcvr)) => {
+          // send final chunk on channel
+          if let Err(e) = sender.send(payload.chunk).await {
+            println!("the receiver channel somehow dropped when sending the final chunk for large upload!");
+            return Err(UploadError::ChannelError(e.to_string()));
+          }
+
+          match rcvr.recv().await {
+            Some(res) => {
+              return Ok(Json(
+                LargeUploadResponse {
+                  orderbook_results: Some(res.0),
+                  parse_results: Some(res.1),
+                  session_id: Some(session_id)
+                }
+              ));
+            },
+            None => return Err(UploadError::ChannelError("sender channel somehow dropped when receiving the final result for large file upload".to_string()))
+          }
+        },
+        _ => return Err(UploadError::SessionNotFound)
+      }
+    },
+    n if n < payload.total_chunks - 1 => {
+      // for all other chunks
+      match session_manager.get_chunk_sender(&session_id).await {
+        Some(chunk_sender) => {
+          if let Err(e) = chunk_sender.send(payload.chunk).await {
+            println!("large file upload receiver channel somehow dropped");
+            return Err(UploadError::ChannelError(e.to_string()));
+          };
+          return Ok(Json(
+            LargeUploadResponse {
+              orderbook_results: None,
+              parse_results: None,
+              session_id: Some(session_id) }
+          ));
+        },
+        None => return Err(UploadError::SessionNotFound)
+      }
+    },
+    _ => return Err(UploadError::InvalidChunk)
+  }
+}
+
+
+/*GCP signBlob api
+async fn generate_signed_url(Json(payload): Json<GenerateSignedUrlRequest>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+
+  // let creds_file_path = env::var("GOOG_SA_CREDS").map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "sa account credentials file environment variable not set".to_string()))?;
+  // println!("creds file path: {}", &creds_file_path);
+
+  // let credentials_json = fs::read(creds_file_path).expect("failed to read creds json");
+  // let credentials_file = serde_json::from_slice::<CredentialsFile>(&credentials_json).expect("error deserializing creds from json!");
+
+  // let tsp = DefaultTokenSourceProvider::new_with_credentials(
+  //   Config::default().with_scopes(&["https://www.googleapis.com/auth/cloud-platform"]),
+  //   Box::new(credentials_file)
+  // ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+  let object_name = payload.file_name;
+  let google_access_id = env::var("GAI").map_err(|_e| (StatusCode::INTERNAL_SERVER_ERROR, "could not find sa account email from environment variable not set".to_string()))?;
+  println!("sa account email: {}", &google_access_id);
+
+  let config = ClientConfig::default().with_auth().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+  println!("client config: {:?}", config);
+  
+  // let tsp = config.token_source_provider.expect("should have a tsp for authorized client"); 
+  // let ts = tsp.token_source();
+  // let token = ts.token().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+  // println!("[**]Token: {}", &token);
+ 
+  // let signed_url = get_signed_url("lob-app-bucket", 
+  //   &object_name,
+  //   google_access_id,
+  //   ts,
+  //   MySignedURLOptions {method: SignedURLMethod::PUT, expires: Duration::from_secs(300)}
+  // )
+  // .await
+  // .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+  let client = Client::new(config);
+  // let bucket_name = format!("{}_gcrgcs_{}", project, name);
+  let options = SignedURLOptions {
+    method: SignedURLMethod::PUT,
+    expires: Duration::from_secs(600),
+    ..SignedURLOptions::default()
+  };
+  let signed_url = client.signed_url(
+    "lob-app-bucket",
+    &object_name,
+    None,
+    None,
+    options)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+  println!("signed url: {}", &signed_url);
+
+  // println!("sending signed url: {}", &url_for_upload);
+
+  Ok(Json(json!({"signed_url": signed_url})))
+}
+
+async fn process_file(Json(payload): Json<GenerateSignedUrlRequest>) -> Result<Json<LargeUploadResponse>, (StatusCode, String)> {
+  let config = ClientConfig::default().with_auth().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+  let client = Client::new(config);
+  println!("[INFO]gclient config success for signed url!");
+  let object_name = payload.file_name;
+
+  let result = client.download_object(
+    &GetObjectRequest {
+      bucket: "lob-app-bucket".to_string(),
+      object: object_name,
+      ..Default::default()
+    }, &Range::default()).await.map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+
+  let file_contents = String::from_utf8(result).map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+
+  let (parsed_orders, duration, raw_cnt, invalid_cnt) = parse_file_orders(file_contents);
+    // parse_duration = duration;
+    // total_raw_orders = raw_cnt;8+
+    // invalid_orders = invalid_cnt;
+  let results = process_uploaded_orders(parsed_orders).await;
+
+  Ok(Json(LargeUploadResponse {
+    orderbook_results: results,
+    parse_results: (duration, raw_cnt, invalid_cnt)
+  }))
+
+}
+*/
