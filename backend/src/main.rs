@@ -1,41 +1,45 @@
 mod order_generator;
 mod engine;
 mod file_upload;
-// mod cloud_auth;
+mod midwares;
 
 use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
-use axum::{body::Bytes, extract::{ws::{Message, WebSocket}, ConnectInfo, DefaultBodyLimit, Multipart, State, WebSocketUpgrade}, http::{header::CONTENT_TYPE, HeaderValue, Method, StatusCode}, response::IntoResponse, routing::{any, get, post}, Json, Router};
-// use cloud_auth::auth::{get_signed_url, MySignedURLOptions};
+use axum::{
+  body::Bytes,
+  extract::{ws::{Message, WebSocket}, DefaultBodyLimit, Multipart, State, WebSocketUpgrade},
+  http::{header::CONTENT_TYPE, Method},
+  middleware,
+  response::IntoResponse,
+  routing::{any, get, post},
+  Extension,
+  Json,
+  Router
+};
 use futures::lock::Mutex;
 use futures_util::{SinkExt, StreamExt};
-
-// use ::google_cloud_auth::credentials::create_access_token_credential;
-// use google_cloud_storage::{client::{Client, ClientConfig}, http::objects::{download::Range, get::GetObjectRequest}, sign::{self, SignedURLMethod, SignedURLOptions}};
-// use google_cloud_token::TokenSourceProvider;
-// use google_cloud_auth::project::Config;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::mpsc, time::sleep};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
-use order_generator::gen::{ServerMessage, Simulator};
-use file_upload::{parser::parse_file_orders, upload::{process_uploaded_orders, FileUploadOrderType, FinalStats, LargeUploadRequest, LargeUploadResponse, LargeUploadSessionManager, UploadError, UploadRequest, UploadResponse}};
+use order_generator::gen::{WsResponse, Simulator};
+use file_upload::{parser::parse_file_orders_v2, upload::{process_uploaded_orders, FileUploadOrderType, FinalStats, LargeUploadResponse, LargeUploadSessionManager, UploadRequest, UploadResponse}};
+use midwares::app_state::{estimate_orders_from_1stchunk, ip_tracker, AppError, PostgresDBPool, RateLimiter, RequestContext};
 
 type OrderSender = mpsc::Sender<Vec<FileUploadOrderType>>;
 type OrderReceiver = mpsc::Receiver<Vec<FileUploadOrderType>>;
 type ResultSender = mpsc::Sender<HashMap<String, FinalStats>>;
 type ResultReceiver = mpsc::Receiver<HashMap<String, FinalStats>>;
-// allow max file uploads of 10MB for the /largeupload route
-const MAX_FILE_SIZE: usize = 1024 * 1024 * 30;
+// allow max file uploads of 15MB for the /largeupload route
+const MAX_FILE_SIZE: usize = 1024 * 1024 * 15;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
-enum ClientMessage {
-  Start { 
-      // client_name: String, 
+enum WsRequest {
+  Start {
       total_objects: usize,  // Optional, defaults to 50_000
-      throttle_nanos: u64, // Optional, defaults to 1000ns
+      // throttle_nanos: u64, // Optional, defaults to 1000ns
       mean_price: f64,  // Optional, defaults to 300.0
       sd_price: f64,  // Optional, defaults to 50.0
       best_price_levels: bool // whether to show best bids and asks, defaults to false
@@ -45,8 +49,8 @@ enum ClientMessage {
 }
 
 enum Simulation {
-  Start(Vec<ServerMessage>),
-  Data(Vec<ServerMessage>),
+  Start(Vec<WsResponse>),
+  Data(Vec<WsResponse>),
   Complete
 }
 
@@ -59,10 +63,10 @@ struct FileUploadSessionData {
   processed_chunks: usize
 }
 
-#[derive(Deserialize)]
-struct GenerateSignedUrlRequest {
-    file_name: String,
-}
+// #[derive(Deserialize)]
+// struct GenerateSignedUrlRequest {
+//     file_name: String,
+// }
 
 #[derive(Clone)]
 struct UploadSessionManager {
@@ -103,7 +107,7 @@ impl UploadSessionManager {
           all_orders.extend(chunk);
           // process when all orders are recvd
           if all_orders.len() >= total_orders {
-            let result = process_uploaded_orders(all_orders).await;
+            let result = process_uploaded_orders(all_orders);
             result_tx.send(result).await.expect("failed to send final result for smallfile on channel!");
             break;
           }
@@ -127,6 +131,14 @@ impl UploadSessionManager {
 #[tokio::main]
 async fn main() {
 
+  
+  
+  const REDIS_URL: &str = "xxxx";
+  const DB_URL: &str = "xxxx";
+
+  let rate_limiter = RateLimiter::new(REDIS_URL).expect("failed to create ratelimiterl!");
+  let db_pool = PostgresDBPool::new(DB_URL).await.expect("failed to create postgres connection pool!");
+
   let small_upload_session_manager = UploadSessionManager::new();
   let large_upload_session_manager = LargeUploadSessionManager::new();
 
@@ -136,20 +148,41 @@ async fn main() {
   .allow_origin(Any)
   .allow_headers([CONTENT_TYPE]);
     
+  /*depc.
   let app = Router::new()
   .route("/health", get(health_check_handler))
-  // .route("/generate-url", post(generate_signed_url))
-  // .route("/process-file", post(process_file))
   .route("/wslob", any(ws_handler))
   .route("/smallupload", post(small_upload_handler)
                         .with_state(small_upload_session_manager)
         )
-  .route("/largeupload", post(large_upload_handler_v2)
+  .route("/largeupload", post(large_upload_handler)
                         .layer(DefaultBodyLimit::max(MAX_FILE_SIZE))
                         .with_state(large_upload_session_manager)
         )
-  // .with_state(session_manager)
+  .layer(Extension(rate_limiter))
+  .layer(Extension(db_pool))
+  .layer(middleware::from_fn(ip_tracker))
   .layer(cors);
+  */
+
+  let with_middleware = Router::new()
+    .route("/wslob", any(ws_handler))
+    .route("/smallupload", post(small_upload_handler)
+              .with_state(small_upload_session_manager))
+    .route("/largeupload", post(large_upload_handler)
+            .layer(DefaultBodyLimit::max(MAX_FILE_SIZE))
+            .with_state(large_upload_session_manager))
+    .layer(Extension(rate_limiter))
+    .layer(middleware::from_fn(ip_tracker))
+    .layer(Extension(db_pool));
+
+  let health_check = Router::new()
+    .route("/health", get(health_check_handler));
+
+  let app = Router::new()
+    .merge(with_middleware)
+    .merge(health_check)
+    .layer(cors);
 
   let listener = TcpListener::bind("0.0.0.0:7575").await.expect("failed to start tcp listener");
 
@@ -160,18 +193,30 @@ async fn health_check_handler() -> Json<serde_json::Value> {
   Json(json!({"code":200, "status": "healthy"}))
 }
 
-async fn ws_handler (ws: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl IntoResponse {
+async fn ws_handler (
+  ws: WebSocketUpgrade,
+  //user_agent: Option<TypedHeader<headers>>,
+  // ConnectInfo(addr): ConnectInfo<SocketAddr>,
+  Extension(rate_limiter): Extension<RateLimiter>,
+  Extension(ctx): Extension<RequestContext>,
+) -> impl IntoResponse {
   // TODO: maybe add UserAgent info!
-  println!("User at {} connected.", addr);
-  ws.on_upgrade(move|socket| handle_socket(socket, addr))
+  // println!("User at {} connected.", addr);
+  ws.on_upgrade(move|socket| handle_socket(socket, ctx, rate_limiter))
 }
 
-async fn handle_socket(socket: WebSocket, who: SocketAddr) {
+async fn handle_socket(
+  socket: WebSocket,
+  // who: SocketAddr,
+  ctx: RequestContext,
+  rate_limiter: RateLimiter
+) {
 
   let (mut sender, mut receiver) = socket.split();
   let (tx, mut rx) = mpsc::channel(1_000_000);
+  let who = ctx.remote_ip;
 
-  let mut batch: Vec<Vec<ServerMessage>>  = vec![];
+  let mut batch: Vec<Vec<WsResponse>>  = vec![];
   let mut batch_count: usize = 0;
   const BATCH_SIZE: usize = 500;
   const BREATHE_AFTER_BATCHES: usize = 10;
@@ -184,30 +229,46 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
           match client_msg {
             Message::Text(t) => {
               println!(">>> {} sent string: {:?}", who, t);
-              let payload = serde_json::from_str::<ClientMessage>(t.as_str()).expect("derserializng client message failed");
+
+              let payload = serde_json::from_str::<WsRequest>(t.as_str()).expect("derserializng client message failed");      
+            
               match payload {
-                ClientMessage::Start {total_objects, throttle_nanos, mean_price, sd_price , best_price_levels} => {
-                  println!("client payload\ntotal objects: {:?} nanos: {:?} mean: {:?} sd: {:?} show best price levels: {:?}", total_objects, throttle_nanos, mean_price, sd_price, best_price_levels);
-                  // spawn a task 
-                  tokio::spawn(process_start_message(tx.clone(), total_objects, mean_price, sd_price, best_price_levels, throttle_nanos));
-               },
-               ClientMessage::Stop => {
-                println!(">>> {} requested STOP", who);
-                break;
-               },
-               ClientMessage::Ack => {
-                println!(">>> {} sent simulation completion ack", who);
-                break;
-               }
+                WsRequest::Start {total_objects, mean_price, sd_price , best_price_levels} => {
+                  println!("client payload\ntotal orders: {:?} mean: {:?} sd: {:?} show best price levels: {:?}", total_objects, mean_price, sd_price, best_price_levels);
+                  if let Err(e) = rate_limiter.would_exceed_limit(&who, &total_objects).await {
+                    println!("{:?}", e);
+                    // send a msg to client and close the connection
+                    let rl_exceeded_signal = WsResponse::RateLimitExceeded;
+                    let rl_exceeded_msg = Message::text(serde_json::to_string(&vec![[rl_exceeded_signal]]).expect("serializing rate limit exceeded signal failed!"));
+                    if let Err(e) = sender.send(rl_exceeded_msg).await {
+                      println!("sending rate limit exceeded message to client failed with: {:?}", e);
+                      break;
+                    }
+                    // we exit eventually after rate limit was exceeded
+                    break;
+                  }
+                  if let Err(e) = rate_limiter.record_orders(&who, total_objects).await {
+                    println!("recording orders to redis db failed with: {:?}", e);
+                    break;
+                  }
+                  // spawn a task to start the ob engine
+                  tokio::spawn(process_start_message(tx.clone(), total_objects, mean_price, sd_price, best_price_levels));
+                },
+                WsRequest::Stop => {
+                  println!(">>> {} requested STOP", who);
+                  break;
+                },
+                WsRequest::Ack => {
+                  println!(">>> {} sent simulation completion ack", who);
+                  break;
+                }
               }
             },
             Message::Close(_c) => {
               println!(">> {} sent CloseFrame msg", who);
               break;
             },
-            _ => {
-              println!(">> {} sent Binary, Ping or Pong", who);
-            }
+            _ => println!(">> {} sent Binary, Ping or Pong", who)
           }
         }
       }
@@ -224,11 +285,12 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
               }
             }
   
-            let completion_signal = ServerMessage::Completed;
+            let completion_signal = WsResponse::Completed;
             let completion_msg = Message::text(serde_json::to_string(&vec![[completion_signal]]).expect("serializing simulation completion signal failed!"));
 
             if let Err(e) = sender.send(completion_msg).await {
-              println!("sending simulation completion signal to dioxus failed: {:?}", e);
+              // return Err(AppError::WebSocketError(format!("Failed to send simulation complete signal to client: {:?}", e)));
+              println!("sending simulation completion signal to client failed: {:?}", e);
               break;
             } else {
               println!("Successfully sent completion signal")
@@ -274,10 +336,10 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
     }
   }
 
-  println!("Websocket context {} destroyed", who);
+  println!("Websocket context destroyed for: {}", who);
 }
 
-async fn process_start_message(tx: mpsc::Sender<Simulation>, num_orders: usize, mean_price: f64, sd_price: f64, best_price_lvls: bool, throttle: u64) {
+async fn process_start_message(tx: mpsc::Sender<Simulation>, num_orders: usize, mean_price: f64, sd_price: f64, best_price_lvls: bool) {
   //TODO: see if we need to add throttling
   let mut simulator = Simulator::new(mean_price, sd_price, best_price_lvls);
   // seed the orderbook with 10k ADD limit orders
@@ -306,16 +368,27 @@ async fn process_start_message(tx: mpsc::Sender<Simulation>, num_orders: usize, 
   }
 }
 
-async fn small_upload_handler(State(session_manager): State<UploadSessionManager>, body: Bytes) -> Result<Json<UploadResponse>, UploadError> {
+async fn small_upload_handler(
+  State(session_manager): State<UploadSessionManager>,
+  Extension(rate_limiter): Extension<RateLimiter>,
+  Extension(req_ctx): Extension<RequestContext>,
+  body: Bytes
+) -> Result<Json<UploadResponse>, AppError> {
   
   //println!("User uploaded file.");
   let payload = match <UploadRequest>::deserialize(&mut rmp_serde::Deserializer::new(&body[..])) {
     Ok(de_payload) => de_payload,
     Err(e) => {
       println!("couldnot deserialize the small file upload request: {:?}", e);
-      return Err(UploadError::DeserializeError(e.to_string()))
+      return Err(AppError::DeserializeError(e.to_string()))
     }
   };
+
+  let remote_ip = req_ctx.remote_ip;
+  let total_orders = payload.total_orders;
+
+  rate_limiter.would_exceed_limit(&remote_ip, &total_orders).await?;
+  rate_limiter.record_orders(&remote_ip, total_orders).await?;
 
   let session_id = match payload.session_id {
     Some(id) => id,
@@ -328,7 +401,7 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
       // let total_orders = payload.total_orders;
       if let Err(e) = order_tx.send(payload.orders).await {
         println!("sending 1st small file orders chunk on channel failed!");
-        return Err(UploadError::ChannelError(e.to_string()));
+        return Err(AppError::InternalError(e.to_string()));
       }
 
       // check if we have only one chunk
@@ -351,10 +424,10 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
                   }
                 ));
               },
-              None => return Err(UploadError::ChannelError("sender dropped somehow when receiving the final result for small file uplaod".to_string()))
+              None => return Err(AppError::InternalError("sender dropped somehow when receiving the final result for small file uplaod".to_string()))
             }
           },
-          None => return Err(UploadError::SessionNotFound)
+          None => return Err(AppError::InternalError("small file upload session not found".to_owned()))
         };
       }
     },
@@ -367,7 +440,7 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
           // send the final chunk on channel
           if let Err(e) = sender.send(payload.orders).await {
             println!("the receiver channel somehow dropped when sending the final chunk for small upload!");
-            return Err(UploadError::ChannelError(e.to_string()));
+            return Err(AppError::InternalError(e.to_string()));
           }
 
           match rcvr.recv().await {
@@ -379,10 +452,10 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
                 }
               ));
             },
-            None => return Err(UploadError::ChannelError("sender channel somehow dropped when receiving the final result for small file upload".to_string()))
+            None => return Err(AppError::InternalError("sender channel somehow dropped when receiving the final result for small file upload".to_string()))
           }
         },
-        _ => return Err(UploadError::SessionNotFound),
+        _ => return Err(AppError::InternalError("small file upload session not found".to_owned())),
       } 
     },
     n if n < payload.total_chunks - 1 => {
@@ -391,7 +464,7 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
         Some(order_sender) => {
           if let Err(e) = order_sender.send(payload.orders).await {
             println!("small file upload receiver channel somehow dropped");
-            return Err(UploadError::ChannelError(e.to_string()));
+            return Err(AppError::InternalError(e.to_string()));
           };
           return Ok(
             Json(
@@ -401,10 +474,10 @@ async fn small_upload_handler(State(session_manager): State<UploadSessionManager
               }
             ));
           },
-          None => return Err(UploadError::SessionNotFound)
+          None => return Err(AppError::InternalError("small file upload session not found".to_owned()))
         }
       },
-    _ => return Err(UploadError::InvalidChunk)
+    _ => return Err(AppError::InternalError("invalid chunk for small file upload".to_owned()))
   }
 }
 
@@ -437,6 +510,7 @@ async fn large_upload_handler(mut multipart: Multipart) -> Result<Json<LargeUplo
 }
 */
 
+/*Failed Try with simple deserialization, gives OOM
 async fn large_upload_handler_v2 (
   State(session_manager): State<LargeUploadSessionManager>,
   body: Bytes
@@ -541,7 +615,83 @@ async fn large_upload_handler_v2 (
     _ => return Err(UploadError::InvalidChunk)
   }
 }
+*/
 
+async fn large_upload_handler (
+  State(state): State<LargeUploadSessionManager>,
+  Extension(rate_limiter): Extension<RateLimiter>,
+  Extension(req_ctx): Extension<RequestContext>,
+  mut multipart: Multipart
+) -> Result<Json<LargeUploadResponse>, AppError> {
+
+  // Extract multipart fields
+  let mut session_id = None;
+  let mut total_chunks = None;
+  let mut chunk_number = None;
+  let mut chunk_data = None;
+
+  while let Some(field) = multipart.next_field().await.map_err(|e| AppError::BadRequest(e.to_string()))? {
+    match field.name() {
+      Some("session_id") => session_id = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?),
+      Some("total_chunks") => total_chunks = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?.parse::<usize>().map_err(|_| AppError::BadRequest("Invalid total_chunks value".to_string()))?),
+      Some("chunk_number") => chunk_number = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?.parse::<usize>().map_err(|_| AppError::BadRequest("Invalid chunk_number value".to_string()))?),
+      Some("chunk") => chunk_data = Some(field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?),
+      _ => {}
+    }
+  }
+
+  // Validate we got all required fields
+  let session_id = session_id.ok_or(AppError::BadRequest("Missing session_id".to_string()))?;
+  let total_chunks = total_chunks.ok_or(AppError::BadRequest("Missing total_chunks".to_string()))?;
+  let chunk_number = chunk_number.ok_or(AppError::BadRequest("Missing chunk_number".to_string()))?;
+  let chunk_data = chunk_data.ok_or(AppError::BadRequest("Missing chunk_data".to_string()))?;
+
+  
+  let remote_ip = req_ctx.remote_ip;
+  // try to estimate total orders with 1st chunk and return early if too much orders
+  if chunk_number == 0 {
+    let estimated_orders = estimate_orders_from_1stchunk(&chunk_data, &total_chunks);
+    rate_limiter.would_exceed_limit(&remote_ip, &estimated_orders).await?;
+  }
+  
+  state.store_chunk(&session_id, chunk_number, chunk_data, total_chunks).await;
+
+  let is_complete = state.is_upload_complete(&session_id).await;
+
+  if is_complete {
+    // get complete file data
+    let complete_data = state.get_all_chunks(&session_id).await.map_err(|e| AppError::InternalError(e))?;
+
+    let (parsed_orders, duration, raw_cnt, invalid_cnt) = parse_file_orders_v2(&complete_data);
+
+    // now we check and record actual orders in the ratelimiter
+    let total_orders = parsed_orders.len();
+    rate_limiter.would_exceed_limit(&remote_ip, &total_orders).await?;
+    rate_limiter.record_orders(&remote_ip, total_orders).await?;
+
+    let ob_results = process_uploaded_orders(parsed_orders);
+
+    // Clean up the chunks after processing
+    state.clear_chunks(&session_id).await.map_err(|e| AppError::InternalError(e))?;
+
+    return Ok(Json(
+      LargeUploadResponse {
+        orderbook_results: Some(ob_results),
+        parse_results: Some((duration, raw_cnt, invalid_cnt)),
+        processed: true
+      }
+    ));
+  }
+
+  // For intermediate chunks, just return acknowledgment
+  Ok(Json(
+    LargeUploadResponse {
+      orderbook_results: None,
+      parse_results: None,
+      processed: false
+    }))
+
+}
 
 /*GCP signBlob api
 async fn generate_signed_url(Json(payload): Json<GenerateSignedUrlRequest>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
