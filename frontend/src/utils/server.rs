@@ -22,21 +22,13 @@ Ack
 }
 
 #[derive(Debug, Serialize)]
-pub struct UploadRequest {
-  pub session_id: Option<String>,
+pub struct SmallUploadRequest {
+  pub session_id: String,
   pub total_chunks: usize,
   pub total_orders: usize,
   pub chunk_number: usize,
   pub orders: Vec<FileUploadOrderType>
 }
-
-// #[derive(Debug, Serialize)]
-// pub struct LargeUploadRequest {
-//   pub session_id: Option<String>,
-//   pub total_chunks: usize,
-//   pub chunk_number: usize,
-//   pub chunk: Vec<u8>
-// }
 
 /* Server Responses */
 #[derive(Debug, Deserialize)]
@@ -57,17 +49,15 @@ pub enum WsResponse {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UploadResponse {
-  // success: bool,
-  pub data: Option<HashMap<String, FinalStats>>,
-  pub session_id: Option<String>,
+pub struct SmallUploadResponse {
+  pub orderbook_results: Option<HashMap<String, FinalStats>>,
+  pub processed: bool
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LargeUploadResponse {
   pub orderbook_results: Option<HashMap<String, FinalStats>>,
   pub parse_results: Option<(Duration, i32, i32)>,
-  // pub session_id: Option<String>,
   pub processed: bool
 }
 
