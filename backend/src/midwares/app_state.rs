@@ -1,6 +1,6 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 use axum::{
-  body::Bytes, extract::{ConnectInfo, Request}, http::StatusCode, middleware::Next, response::{IntoResponse, Response}, Json 
+  body::Bytes, http::StatusCode, response::IntoResponse, Json 
 };
 use serde::Serialize;
 use serde_json::json;
@@ -8,15 +8,17 @@ use redis::{AsyncCommands, Client as RedisClient};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 // simple heurestic based on size to estimate orders 
-static ESTIMATED_ORDERS_PER_MB: i32 = 35_000;
+static ESTIMATED_ORDERS_PER_MB: i32 = 30_000;
 
 // Request context containing IP information
 #[derive(Clone)]
 pub struct RequestContext {
-    pub remote_ip: String,
-    pub server_ip: String,
+  pub remote_ip: String,
+  pub origin: String,
+  pub user_agent: String,
+  pub timestamp: String,
+  pub signature: String,
 }
-
 
 #[derive(Debug, Serialize, Clone)]
 pub enum AppError {
@@ -24,7 +26,7 @@ pub enum AppError {
   DeserializeError(String),
   BadRequest(String),
   InternalError(String),
-  // WebSocketError(String),
+  Unauthorized(String)
 }
 
 impl IntoResponse for AppError {
@@ -34,7 +36,7 @@ impl IntoResponse for AppError {
       Self::DeserializeError(msg) => (StatusCode::BAD_REQUEST, msg),
       Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
       Self::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-      // Self::WebSocketError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+      Self::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg)
     };
 
     let body = Json(json!({"error": message, "code": status.as_u16()}));
@@ -53,7 +55,11 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-  pub fn new(redis_url: &str) -> Result<Self, AppError> {
+  pub fn new(redis_url: &str,
+    ip_max_orders: usize,
+    ip_window_secs: i64,
+    global_max_orders: usize,
+    global_window_secs: i64) -> Result<Self, AppError> {
     println!("[INFO] Redis instance initializing for rate limiter...");
 
     let client = RedisClient::open(redis_url)
@@ -61,10 +67,10 @@ impl RateLimiter {
 
     Ok(Self {
       redis: Arc::new(client),
-      ip_max_orders: 2_000_000,
-      ip_window_secs: 30, 
-      global_max_orders: 3_000_000,
-      global_window_secs: 2 * 60  
+      ip_max_orders,
+      ip_window_secs, 
+      global_max_orders,
+      global_window_secs  
     })
   }
 
@@ -153,13 +159,14 @@ impl PostgresDBPool {
       CREATE TABLE IF NOT EXISTS client_daily_visits (
         id SERIAL PRIMARY KEY,
         remote_ip TEXT NOT NULL,
-        server_ip TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        user_agent TEXT NOT NULL,
         visit_date DATE NOT NULL DEFAULT CURRENT_DATE,
         last_visit TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         rl_visits INT NOT NULL DEFAULT 0,
         total_visits INT NOT NULL DEFAULT 0,
         total_orders BIGINT NOT NULL DEFAULT 0,
-        UNIQUE(remote_ip, visit_date)
+        UNIQUE(remote_ip, visit_date, origin, user_agent)
       );
       "
     )
@@ -173,14 +180,16 @@ impl PostgresDBPool {
   pub fn record_in_db(
     &self,
     remote_ip: &str,
-    server_ip: &str,
+    origin: &str,
+    user_agent: &str,
     total_orders: usize,
     was_rate_limited: bool
   ) {
     let pool = self.pool.clone();
 
     let remote_ip = remote_ip.to_string();
-    let server_ip = server_ip.to_string();
+    let origin = origin.to_string();
+    let user_agent = user_agent.to_string();
     let rl_visits: usize = if was_rate_limited { 1 } else { 0 };
 
     // async store in DB
@@ -188,16 +197,17 @@ impl PostgresDBPool {
 
       let query = format!(
         "
-        INSERT INTO client_daily_visits (remote_ip, server_ip, visit_date, last_visit, rl_visits, total_visits, total_orders)
-        VALUES ('{}', '{}', CURRENT_DATE, CURRENT_TIMESTAMP, {}, 1, {})
-        ON CONFLICT (remote_ip, visit_date) DO UPDATE
+        INSERT INTO client_daily_visits (remote_ip, origin, user_agent, visit_date, last_visit, rl_visits, total_visits, total_orders)
+        VALUES ('{}', '{}', '{}', CURRENT_DATE, CURRENT_TIMESTAMP, {}, 1, {})
+        ON CONFLICT (remote_ip, visit_date, origin, user_agent) DO UPDATE
         SET last_visit = CURRENT_TIMESTAMP,
             rl_visits = client_daily_visits.rl_visits + EXCLUDED.rl_visits,
             total_visits = client_daily_visits.total_visits + 1,
             total_orders = client_daily_visits.total_orders + EXCLUDED.total_orders;
         ",
         remote_ip,
-        server_ip,
+        origin,
+        user_agent,
         rl_visits,
         total_orders
       );
@@ -212,41 +222,6 @@ impl PostgresDBPool {
       }
     });
   }
-}
-
-// IP tracking Middleware
-pub async fn ip_tracker(
-  ConnectInfo(addr): ConnectInfo<SocketAddr>,
-  mut req: Request,
-  next: Next
-) -> Response {
-
-  //println!("[IPtracker MW] got headers");
-  // for (k, v) in req.headers().iter() {
-  //   println!("{:?}: {:?}", k, v);
-  // }
-
-  // Get remote IP from GCP headers, or fallback to socket address
-  let remote_ip = req.headers()
-    .get("X-Forwarded-For")
-    .and_then(|h| h.to_str().ok())
-    .unwrap_or(&addr.ip().to_string())
-    .to_string();
-  println!("[**]remote_ip: {}", &remote_ip);
-
-  let server_ip = req.headers()
-    .get("X-Forwarded-Server")
-    .and_then(|h| h.to_str().ok())
-    .unwrap_or("NA")
-    .to_string();
-  println!("[**]server_ip: {}", &server_ip);
-
-  req.extensions_mut().insert(RequestContext {
-    remote_ip,
-    server_ip
-  });
-
-  next.run(req).await
 }
 
 pub fn estimate_orders_from_1stchunk(chunk_data: &Bytes, total_chunks: &usize) -> usize {
