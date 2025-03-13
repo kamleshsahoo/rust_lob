@@ -1,2 +1,2 @@
-pub mod upload;
+pub mod processor;
 pub mod parser;
