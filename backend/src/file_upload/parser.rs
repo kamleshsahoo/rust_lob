@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr, time::{Duration, Instant}};
 use rust_decimal::Decimal;
 
 use crate::engine::orderbook::BidOrAsk;
-use super::upload::FileUploadOrderType;
+use super::processor::FileUploadOrderType;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -46,8 +46,8 @@ impl fmt::Display for ParseError {
 impl fmt::Display for BidOrAsk {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
-        Self::Bid => write!(f, "BID"),
-        Self::Ask => write!(f, "ASK"),
+      Self::Bid => write!(f, "BID"),
+      Self::Ask => write!(f, "ASK"),
     }
   }
 }
@@ -55,23 +55,23 @@ impl fmt::Display for BidOrAsk {
 impl FromStr for BidOrAsk {
   type Err = ParseError;
   fn from_str(s: &str) -> Result<Self, Self::Err> {
-      match s.to_lowercase().as_str() {
-        "bid" => Ok(BidOrAsk::Bid),
-        "ask" => Ok(BidOrAsk::Ask),
-        _ => Err(ParseError::InvalidBidorAsk(s.to_string())) 
-      }
+    match s.to_lowercase().as_str() {
+      "bid" => Ok(BidOrAsk::Bid),
+      "ask" => Ok(BidOrAsk::Ask),
+      _ => Err(ParseError::InvalidBidorAsk(s.to_string())) 
+    }
   }
 }
 
 impl From<std::num::ParseIntError> for ParseError {
   fn from(value: std::num::ParseIntError) -> Self {
-      ParseError::InvalidOrderId(value)
+    ParseError::InvalidOrderId(value)
   }
 }
 
 impl From<rust_decimal::Error> for ParseError {
   fn from(value: rust_decimal::Error) -> Self {
-      ParseError::InvalidPrice(value)
+    ParseError::InvalidPrice(value)
   }
 }
 
@@ -84,8 +84,8 @@ impl FileUploadOrder {
     let parts: Vec<&str> = line.split(|c| c == ',').map(|s| s.trim()).collect();
 
     let order_type = match parts.get(0).map(|s| s.to_uppercase()) {
-        Some(s) => s,
-        None => return Err(ParseError::Empty)
+      Some(s) => s,
+      None => return Err(ParseError::Empty)
     };
 
     let order = match order_type.as_str() {
@@ -134,26 +134,60 @@ impl FileUploadOrder {
   }
 }
 
-
-pub fn parse_file_orders(contents: String) -> (Vec<FileUploadOrderType>, Duration, i32, i32) {
-  
+pub fn parse_file_orders_v2 (data: &[u8]) -> (Vec<FileUploadOrderType>, Duration, i32, i32) {
   let mut total_raw_orders = 0;
   let mut invalid_orders = 0;
   let mut parsed_orders: Vec<FileUploadOrderType> = vec![];
 
   let start = Instant::now();
-  for order in contents.lines() {
+  
+  let mut start_pos = 0;
+  for (i, &byte) in data.iter().enumerate() {
+    if byte == b'\n' {
+      if i > start_pos {
+        total_raw_orders += 1;
+
+        match std::str::from_utf8(&data[start_pos..i]) {
+          Ok(line) => {
+            match FileUploadOrder::parse(line) {
+              Ok(parsed_order) => {
+                parsed_orders.push(parsed_order.order);
+              },
+              Err(_e) => {
+                invalid_orders += 1;
+              }
+            }
+          },
+          Err(_e) => {
+            invalid_orders += 1;
+          }
+        }
+      }
+      start_pos = i + 1;
+    }
+  }
+
+  // handle last line if there's no trailing newline
+  if start_pos < data.len() {
     total_raw_orders += 1;
-    match FileUploadOrder::parse(order) {
-      Ok(parsed_order) => {
-        parsed_orders.push(parsed_order.order);
+    match std::str::from_utf8(&data[start_pos..]) {
+      Ok(line) => {
+        match FileUploadOrder::parse(line) {
+          Ok(parsed_order) => {
+            parsed_orders.push(parsed_order.order);
+          },
+          Err(_e) => {
+            invalid_orders += 1;
+          }
+        }
       },
-      Err(e) => {
+      Err(_e) => {
         invalid_orders += 1;
       }
     }
   }
-  let parse_duration = start.elapsed();
 
+  let parse_duration = start.elapsed();
   (parsed_orders, parse_duration, total_raw_orders, invalid_orders)
+
 }
