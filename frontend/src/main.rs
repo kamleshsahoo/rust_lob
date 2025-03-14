@@ -3,17 +3,25 @@ mod pages;
 mod components;
 mod utils;
 
-use components::nav::NavBar;
+use components::{accordion::SimLayout, template::Template};
 use dioxus::prelude::*;
-use pages::{simulator::Simulator, home::Home};
+use pages::{simulator::Simulator, home::Home, docs::{Docs, FrontDocs}};
 
 #[derive(Routable, PartialEq, Clone)]
 enum Route {
-    #[layout(NavBar)]
+    #[layout(Template)]
     #[route("/")]
     Home {},
-    #[route("/simulator")]
-    Simulator {},
+    #[nest("/docs")]
+        #[route("/")]
+        Docs {},
+        #[route("/front")]
+        FrontDocs {},
+    #[end_nest]
+    #[layout(SimLayout)]
+        #[route("/simulator")]
+        Simulator {},
+    #[end_layout]
     #[route("/:..route")]
     PageNotFound { route: Vec<String> }
 }
@@ -23,7 +31,9 @@ fn main() {
 }
 
 fn App() -> Element {
-    rsx! { Router::<Route> {} }
+    rsx! {
+        Router::<Route> {}
+    }
 }
 
 #[component]
