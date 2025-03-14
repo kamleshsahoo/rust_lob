@@ -9,16 +9,14 @@ use super::file_handler::{FileUploadOrderType, FinalStats};
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum WsRequest {
-Start { 
-    // client_name: String, 
+  Start { 
     total_objects: usize,  // Optional, defaults to 10
-    // throttle_nanos: u64, // Optional, defaults to 1000ns
     mean_price: f64,  // Optional, defaults to 300.0
     sd_price: f64,  // Optional, defaults to 50.0
     best_price_levels: bool // whether to show best bids and asks, defaults to false
-},
-Stop,
-Ack
+  },
+  Stop,
+  Ack
 }
 
 #[derive(Debug, Serialize)]
@@ -61,22 +59,40 @@ pub struct LargeUploadResponse {
   pub processed: bool
 }
 
-/* Server Error */
+// App Errors
 #[derive(Debug, Clone, PartialEq)]
-pub enum ServerError {
-    ConnectionFailed(String),
-    ServerUnhealthy(String),
-    RateLimitExceeded(String),
+pub enum AppError {
+  WsConnectionError(String),
+  UploadConnectionError(String),
+  ServerUnhealthy(String),
+  RateLimitExceeded(String),
+  CompressionError(String),
+  DecompressionError(String),
+  WsChannelError(String),
+  ReqwestError(String),
+  SerializeError(String),
+  DeserializeError(String),
+  WasmError(String),
+  AuthorizationError(String),
 }
 
-impl std::error::Error for ServerError {}
+impl std::error::Error for AppError {}
 
-impl fmt::Display for ServerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ServerError::ConnectionFailed(msg) => write!(f, "Connection failed: {}", msg),
-            ServerError::ServerUnhealthy(msg) => write!(f, "Server unhealthy: {}", msg),
-            ServerError::RateLimitExceeded(msg) => write!(f, "Rate limit exceeded: {}", msg),
-        }
+impl fmt::Display for AppError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      AppError::WsConnectionError(msg) => write!(f, "Websocket connection error: {}", msg),
+      AppError::UploadConnectionError(msg) => write!(f, "Upload connection error: {}", msg),
+      AppError::ServerUnhealthy(msg) => write!(f, "Server unhealthy: {}", msg),
+      AppError::RateLimitExceeded(msg) => write!(f, "Rate limit exceeded: {}", msg),
+      AppError::CompressionError(msg) => write!(f, "Compression error: {}", msg),
+      AppError::DecompressionError(msg) => write!(f, "Decompression error: {}", msg),
+      AppError::WsChannelError(msg) => write!(f, "Websocket update channel error: {}", msg),
+      AppError::ReqwestError(msg) => write!(f, "Reqwest error: {}", msg),
+      AppError::SerializeError(msg) => write!(f, "Serialize error :{}", msg),
+      AppError::DeserializeError(msg) => write!(f, "Deserialize error:{}", msg),
+      AppError::WasmError(msg) => write!(f, "Wasm error: {}", msg),
+      AppError::AuthorizationError(msg) => write!(f, "Authorization error: {}", msg)
     }
+  }
 }
