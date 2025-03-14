@@ -49,7 +49,7 @@ fn quantiles_with_mean(vec: &mut Vec<i64>, qvals: &Vec<f64>) -> Vec<f64> {
 }
 
 pub fn get_latency_by_ordertype<'a>(stats: &'a Vec<EngineStats>, qvals: &'a Vec<f64>) ->  HashMap<String, Vec<f64>> {
-
+  // accumulate latencies indexed by ordertypes
   let mut ordertype_fold = stats.iter().fold(HashMap::new(), |mut map_state, e| {
     match e.order_type.as_str() {
       "ADD" => { 
@@ -65,7 +65,8 @@ pub fn get_latency_by_ordertype<'a>(stats: &'a Vec<EngineStats>, qvals: &'a Vec<
     }
     map_state
   });
-
+  
+  // compute the quantiles and mean of the acc. latencies.
   let ordertype_fold_stats: HashMap<String, Vec<f64>> = ordertype_fold.iter_mut().map(|(k, v)| { 
     let stats = quantiles_with_mean( v, qvals);
     (String::from(*k), stats)
@@ -76,7 +77,7 @@ pub fn get_latency_by_ordertype<'a>(stats: &'a Vec<EngineStats>, qvals: &'a Vec<
 }
 
 pub fn get_latency_by_avl_trades<'a>(stats: &'a Vec<EngineStats>) -> BTreeMap<(i64, i64), f64> {
-
+ // accumulate latencies indexed by (executed_orders, avl_rebalances)
   let trades_avl_fold = stats.iter().fold(
     BTreeMap::new(), |mut map_state, e| { 
       map_state
@@ -86,7 +87,7 @@ pub fn get_latency_by_avl_trades<'a>(stats: &'a Vec<EngineStats>) -> BTreeMap<(i
       map_state
     }
   );
-  // may use filter_map
+  // compute mean of the accumulated latencies
   let trades_avl_fold_stats:BTreeMap<(i64, i64), f64>  = trades_avl_fold.iter().map(|(k, v)| {
     let avg_latency = mean(v); 
     (*k, avg_latency)
@@ -147,7 +148,7 @@ pub fn bin_data(data: &Vec<i64>, bin_width: i64, max_value: i64) ->  Vec<DataPoi
     match bin.range {
       BinRange::Fixed(x0, x1) => {
         let centre: f64 = (x0 + x1) as f64 / 2.0;
-        let label = format!("{}-{}", x0, x1);
+        let label = format!("{}-{} ns", x0, x1);
       
         Some(DataPoint::Value(CompositeValue::Array(vec![
           CompositeValue::Number(NumericValue::Float(centre)), 
@@ -167,7 +168,6 @@ pub fn bin_data(data: &Vec<i64>, bin_width: i64, max_value: i64) ->  Vec<DataPoi
 
 pub fn bar3d_data(data: &BTreeMap<(i64, i64), f64>) -> Vec<Vec<CompositeValue>> {
   let mut data_3d: Vec<Vec<CompositeValue>> = vec![];
-  // data_3d.push(vec![CompositeValue::String(String::from("Trades")), CompositeValue::String(String::from("AVL")), CompositeValue::String(String::from("Latency"))]);
 
   for (k, v) in data.iter() {
     let trade_cnt = CompositeValue::Number(NumericValue::Integer(k.0));
