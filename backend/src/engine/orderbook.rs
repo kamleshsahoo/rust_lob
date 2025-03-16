@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use rand::{rngs::StdRng, Rng};
 use rust_decimal::Decimal;
-use serde::Serialize;
-
+use serde::{Deserialize, Serialize};
 use super::tree::{delete_limit, insert_recursive};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum BidOrAsk {
   Bid,
   Ask,
@@ -114,7 +114,7 @@ pub struct Arena {
   pub sell_limits: HashMap<Decimal, Limit>,
   pub orders: HashMap<u64, Order>,
   limit_orders: HashSet<u64>,
-  executed_orders: Vec<ExecutedOrders>,
+  pub executed_orders: Vec<ExecutedOrders>,
 
   pub highest_buy: Option<Decimal>,
   pub lowest_sell: Option<Decimal>,
@@ -132,7 +132,7 @@ impl Arena {
 
   pub fn get_executed_orders(&mut self, offset: &mut usize) -> Option<Vec<ExecutedOrders>> {
     let mut fresh_trades = None;
-    if self.executed_orders_count > 0 && *offset != self.executed_orders_count {
+    if self.executed_orders.len() > 0 && *offset != self.executed_orders.len() {
       let trades = &self.executed_orders[*offset..];
       *offset = self.executed_orders.len(); // update the offset
       fresh_trades = Some(trades.to_vec());
@@ -221,15 +221,15 @@ impl Arena {
     }
   }
 
-  pub fn get_random_order_id(&self) -> Option<&u64> {
-    //TODO: remove assert when tested!
-    // also see we can remove hardcoded `10_000`
-    assert_eq!(self.orders.len(), self.limit_orders.len(), "length of order map and limit order should match since we only have limit orders");
+  pub fn get_random_order_id(&self, rng: &mut StdRng) -> Option<&u64> {
+    // NOTE: the 10k pre seed orders
+    let count = self.limit_orders.len();
+    // assert_eq!(self.orders.len(), count, "length of order map and limit order should match since we only have limit orders");
 
-    if self.limit_orders.len() > 10_000 {
-      // each iter creates a random ordering
-      let mut iter = self.limit_orders.iter();
-      let id = iter.next();
+    if count > 10_000 {
+      let skip_count = rng.random_range(0..count);
+      let id = self.limit_orders.iter().skip(skip_count).next();
+      //println!("[OB]random id: {:?}", id);
       return id;
     }
     None
@@ -240,12 +240,9 @@ impl Arena {
       BidOrAsk::Bid => {
         while  self.lowest_sell.is_some() && *shares != 0 && self.lowest_sell.unwrap() <= *limit_price {
           let lowest_sell_price = self.lowest_sell.unwrap();
-
           if *shares <= self.sell_limits[&lowest_sell_price].total_volume {
-            //TODO: marketOrderHelper cpp starts here. 
             self.market_order_helper(order_id, bid_or_ask, shares);
             return 0;
-
           } else {
             // partial order fullfillment
             let mut total_volume = self.sell_limits[&lowest_sell_price].total_volume;
@@ -256,12 +253,10 @@ impl Arena {
         *shares
       },
       BidOrAsk::Ask => {
-        
         while  self.highest_buy.is_some() && *shares != 0 && self.highest_buy.unwrap() >= *limit_price {
           // TODO: See if we can smartly unwrap highest_buy once and then use
           let highest_buy_price = self.highest_buy.unwrap();
           if *shares <= self.buy_limits[&highest_buy_price].total_volume {
-            //marketOrderHelper cpp starts here. 
             self.market_order_helper(order_id, bid_or_ask, shares);
             return 0;
           } else {
@@ -338,62 +333,6 @@ impl Arena {
       } 
     }
   }
-
-  /*TODO: Check if can be removed
-  fn handle_empty_book_edge(book_edge: &mut Option<Decimal>, limit_map: &mut HashMap<Decimal, Limit>, tree: &mut Option<Decimal>) -> Limit {
-    
-    let book_edge_price = book_edge.unwrap();
-    //first update bookedge if limit is root
-    if book_edge_price == tree.unwrap() {
-      match limit_map[&book_edge_price].bid_or_ask {
-        BidOrAsk::Bid if !limit_map[&book_edge_price].left_child.is_none() => {
-          *book_edge = limit_map[&book_edge_price].left_child
-        },
-        BidOrAsk::Ask if !limit_map[&book_edge_price].right_child.is_none() => {
-          *book_edge = limit_map[&book_edge_price].right_child
-        },
-        _ => {
-          *book_edge = None
-        }
-      }
-    } else {
-      match limit_map[&book_edge_price].bid_or_ask {
-        BidOrAsk::Bid if !limit_map[&book_edge_price].left_child.is_none() => {
-          *book_edge = limit_map[&book_edge_price].left_child
-        },
-        BidOrAsk::Ask if !limit_map[&book_edge_price].right_child.is_none() => {
-          *book_edge = limit_map[&book_edge_price].right_child
-        },
-        _ => {
-          *book_edge = limit_map[&book_edge_price].parent
-        }
-      }   
-    }
-    //second erase from limit map
-    let book_edge_limit = limit_map.remove(&book_edge_price).unwrap();
-    //third change root limit in AVL if root is deleted
-    if *tree == Some(book_edge_price) {
-      if book_edge_limit.right_child.is_none() {
-        *tree = book_edge_limit.left_child;
-      } else {
-        *tree = book_edge_limit.right_child;
-        let mut root_price = tree.unwrap();
-        while !limit_map[&root_price].left_child.is_none() {
-          *tree = limit_map[&root_price].left_child;
-          root_price = tree.unwrap();
-        }
-      }
-      // set the parent of root to None
-      if let Some(tree_price) = tree {
-        if let Some(limit) = limit_map.get_mut(&tree_price) {
-          limit.parent = None
-        }
-      }
-    } 
-
-    book_edge_limit
-  }
-  */
 
   pub fn add_limit_order(&mut self, order_id: u64, bid_or_ask: BidOrAsk, mut shares: u64, limit_price: Decimal) {
     
@@ -578,7 +517,7 @@ impl Arena {
         delete_limit(&mut self.avl_rebalances,&parent_price, book_edge, tree, limit_map)
       }
 
-      // deleteFromOrderMap(orderId)
+      // delete orderid from ordermap 
       self.orders.remove(&order_id);
       self.limit_orders.remove(&order_id);
     }
