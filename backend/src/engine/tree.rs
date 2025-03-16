@@ -258,7 +258,6 @@ pub fn delete_limit(avl_rebal_cnt: &mut u64, limit_price: &Decimal, book_edge: &
     
     if book_edge != tree {
       match bid_or_ask {
-        //BidOrAsk::Bid if limit.left_child.is_some() => *book_edge = limit.left_child,
         BidOrAsk::Bid if book_edge_l.left_child.is_some() => *book_edge = book_edge_l.left_child,
         BidOrAsk::Ask if book_edge_l.right_child.is_some() => *book_edge = book_edge_l.right_child,
         _ => *book_edge = book_edge_l.parent
@@ -266,7 +265,6 @@ pub fn delete_limit(avl_rebal_cnt: &mut u64, limit_price: &Decimal, book_edge: &
     }
     else {
       match bid_or_ask {
-        // BidOrAsk::Bid if limit.left_child.is_some() => *book_edge = limit.left_child,
         BidOrAsk::Bid if book_edge_l.left_child.is_some() => *book_edge = book_edge_l.left_child,
         BidOrAsk::Ask if book_edge_l.right_child.is_some() => *book_edge = book_edge_l.right_child,
         _ => *book_edge = None
@@ -293,7 +291,7 @@ pub fn delete_limit(avl_rebal_cnt: &mut u64, limit_price: &Decimal, book_edge: &
     }
   }
 
-  //TODO: side effects of deleting limit (similar to running Limit destructor)
+  //handle side effects of deleting limit (linking correct nodes)
   handle_delete_limit(&limit, limit_map);
 
   //setting parents
@@ -302,7 +300,7 @@ pub fn delete_limit(avl_rebal_cnt: &mut u64, limit_price: &Decimal, book_edge: &
   while parent_limit_price.is_some() {
 
     let mut parent_limit_price_unwraped = parent_limit_price.expect("parent limit price cannot be None since already checked in the above while exp");
-    // TODO: balancing AVL stuff
+    // balance AVL tree
     let mut bst = BinaryTree::new_for_delete(limit_map, tree.as_mut(), avl_rebal_cnt);
     parent_limit_price_unwraped = bst.balance_tree(&parent_limit_price_unwraped);
 
@@ -310,10 +308,8 @@ pub fn delete_limit(avl_rebal_cnt: &mut u64, limit_price: &Decimal, book_edge: &
       if parent_limit_.parent.is_some(){ 
         if let Some(x) = limit_map.get_mut(&parent_limit_.parent.expect("parent of the parent limit price should exist, since already checked in the above if exp")) {
           if x.limit_price > limit.limit_price { 
-            //x.set_left_child(parent_limit_price_unwraped); 
             x.left_child = Some(parent_limit_price_unwraped); 
-          } else { 
-            //x.set_right_child(parent_limit_price_unwraped);
+          } else {
             x.right_child = Some(parent_limit_price_unwraped);
           }
         }
