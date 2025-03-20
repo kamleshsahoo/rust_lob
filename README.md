@@ -121,7 +121,7 @@ Found a problem or have a suggestion? Feel free to open an issue or contribute b
 
 - Push to the branch: `git push origin feature-name`
 
-- Submit a Pull Request for review.
+- Submit a pull request for review.
 
 # License
 This project is licensed under the [MIT License](LICENSE).
