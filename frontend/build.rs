@@ -1,6 +1,5 @@
 use dotenvy::dotenv;
 
-
 fn main() {
    // Tell Cargo that if the env file changes, to rerun this build script.
   println!("cargo::rerun-if-changed=.env");
