@@ -134,7 +134,7 @@ impl FileUploadOrder {
   }
 }
 
-pub fn parse_file_orders_v2 (data: &[u8]) -> (Vec<FileUploadOrderType>, Duration, i32, i32) {
+pub fn parse_file_orders (data: &[u8]) -> (Vec<FileUploadOrderType>, Duration, i32, i32) {
   let mut total_raw_orders = 0;
   let mut invalid_orders = 0;
   let mut parsed_orders: Vec<FileUploadOrderType> = vec![];
