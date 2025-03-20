@@ -1,27 +1,21 @@
 [application]
-
 # App (Project) Name
-name = "frontend"
+name = "Orderbook"
 
 [web.app]
-
 # HTML title tag content
-title = "frontend"
+title = "Orderbook"
+icon = "assets/lob.png"
 
-# include `assets` in web platform
+[web.watcher]
+
+[bundle]
+identifier = "ksahoo"
+publisher = "KamleshSahoo"
+icon = ["assets/lob.png", "assets/lob.icns", "assets/lob.ico"]
+
 [web.resource]
-
-# Additional CSS style files
-style = []
-
-# Additional JavaScript files
-script = [
-    "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js",
-    "https://cdn.jsdelivr.net/npm/echarts-gl@2.0.9/dist/echarts-gl.min.js",
-]
+script = []
 
 [web.resource.dev]
-
-# Javascript code file
-# serve: [dev-server] only
 script = []
