@@ -7,21 +7,33 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-dioxus = { version = "0.6.0", features = ["router"] }
+dioxus = { version = "0.6.3", features = ["router", "html"] }
 futures = "0.3.31"
 futures-util = "0.3.31"
 gloo-net = "0.6.0"
 serde = "1.0.217"
 serde_json = "1.0.137"
 rust_decimal = "1.36"
+rust_decimal_macros = "1.36.0"
+charming = { git = "https://github.com/yuankunzhang/charming.git", features = ["wasm"] }
+web-sys = { version = "0.3.77", features = ["Performance", "Window", "Document", "HmacImportParams", "Crypto", "SubtleCrypto", "CryptoKey"] }
+reqwest = { version = "0.12.12", features = ["json", "multipart"] }
+rmp-serde = "1.3.0"
+tokio = { version = "1.43.0", features = ["sync"]}
+wasm-bindgen-futures = "0.4.50"
+js-sys = "0.3.77"
+async-std = "1.13.0"
+uuid = { version = "1.15.1", features = ["v4", "js"] }
+flate2 = "1.1.0"
+
+[build-dependencies]
+dotenvy = "0.15.7"
 
 [features]
 default = ["web"]
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
-
-[profile]
 
 [profile.wasm-dev]
 inherits = "dev"
