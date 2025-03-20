@@ -187,7 +187,6 @@ pub fn Simulator() -> Element {
     let mut show_cumlative_results: Signal<bool> = use_signal(||false);
     let mut feed_killed: Signal<bool> = use_signal(||true);
     let mut view: Signal<View> = use_signal(||View::Selector);
-    //let mut server_error: Signal<Option<ServerError>> = use_signal(||None);
 
     // Channel to send messages from WebSocket to the UI
     let (update_tx, mut update_rx) = mpsc::channel::<DataUpdate>(1_000_000);
