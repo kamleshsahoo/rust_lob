@@ -1,194 +1,95 @@
 #![allow(non_snake_case)]
 
-use std::{fmt, collections::HashMap, str::FromStr, sync::Arc};
+use std::collections::HashMap;
+use std::time::Duration;
+use dioxus::html::{FileEngine, HasFileData};
 use dioxus::prelude::*;
-use dioxus::html::FileEngine;
-use dioxus::logger::tracing::{info, warn};
-use rust_decimal::Decimal;
+use dioxus::web::WebEventExt;
+use web_sys::{HtmlInputElement, wasm_bindgen::JsCast};
 use crate::components::formDialog::Dialog;
-use crate::pages::simulator::Mode;
-
-struct PreviewRow {
-  row_id: String,
-  ordertype: String,
-  order_id: String,
-  side: String,
-  shares: String,
-  price: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum BidOrAsk {
-  Bid,
-  Ask,
-}
-
-impl fmt::Display for BidOrAsk {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match self {
-        Self::Bid => write!(f, "BID"),
-        Self::Ask => write!(f, "ASK"),
-    }
-  }
-}
-
-impl FromStr for BidOrAsk {
-  type Err = ParseError;
-  fn from_str(s: &str) -> Result<Self, Self::Err> {
-      match s.to_lowercase().as_str() {
-        "bid" => Ok(BidOrAsk::Bid),
-        "ask" => Ok(BidOrAsk::Ask),
-        _ => Err(ParseError::InvalidBidorAsk(s.to_string())) 
-      }
-  }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum FileUploadOrderType {
-  Add {
-    id: u64,
-    side: BidOrAsk,
-    shares: u64,
-    price: Decimal
-  },
-  Modify {
-    id: u64,
-    shares: u64,
-    price: Decimal
-  },
-  Cancel {
-    id: u64,
-  },
-}
-
-#[derive(Debug)]
-enum ParseError {
-  InvalidBidorAsk(String),
-  InvalidOrderType(String),
-  InvalidOrderFormat(String),
-  Empty
-}
-
-impl fmt::Display for ParseError {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match self {
-      Self::InvalidBidorAsk(bid_or_ask) => {
-        write!(f, "Invalid bid/ask string: {}", bid_or_ask)
-      },
-      Self::InvalidOrderType(order_type) => {
-        write!(f, "Invalid order type string: {}", order_type)
-      },
-      Self::InvalidOrderFormat(order) => {
-        write!(f, "Invalid {} order format", order)
-      },
-      Self::Empty => {
-        write!(f, "Empty order line in file")
-      }
-    }
-  }
-}
-
-impl std::error::Error for ParseError {}
-
-struct FileUploadOrder {
-  order: FileUploadOrderType
-}
-
-impl FileUploadOrder {
-  fn parse(line: &str) -> Result<Self, ParseError> {
-    let parts: Vec<&str> = line.split(|c| c == ',').map(|s| s.trim()).collect();
-
-    let order_type = match parts.get(0).map(|s| s.to_uppercase()) {
-        Some(s) => s,
-        None => return Err(ParseError::Empty)
-    };
-
-    let order = match order_type.as_str() {
-      "ADD" => {
-        if parts.len() != 5 {
-          return Err(ParseError::InvalidOrderFormat("ADD".to_string()));
-        }
-        FileUploadOrderType::Add {
-          id: parts[1].parse().expect("parsing id to u64 failed"),
-          side: BidOrAsk::from_str(parts[2])?,
-          shares: parts[3].parse().expect("parsing shares to u64 failed"),
-          price: Decimal::from_str(parts[4]).expect("parsing price to Decimal failed")
-        }
-      },
-      "MODIFY" => {
-        if parts.len() != 4 {
-          return Err(ParseError::InvalidOrderFormat("MODIFY".to_string()));
-        }
-        FileUploadOrderType::Modify { 
-          id: parts[1].parse().expect("parsing id to u64 failed"),
-          shares: parts[2].parse().expect("parsing shares to u64 failed"),
-          price: Decimal::from_str(parts[3]).expect("parsing price to Decimal failed")
-        }
-      },
-      "CANCEL" => {
-        if parts.len() != 2 {
-          return Err(ParseError::InvalidOrderFormat("CANCEL".to_string()));
-        }
-        FileUploadOrderType::Cancel { id: parts[1].parse().expect("parsing id to u64 failed") }
-      },
-      _ => return Err(ParseError::InvalidOrderType(order_type)),
-    };
-    Ok(FileUploadOrder {order})
-  }
-}
-
-// struct UploadedFile {
-//   name: String,
-//   contents: String,
-// }
+use crate::components::toast::{ErrorToast, SuccessToast};
+use crate::pages::simulator::{Mode, HEALTH_CHECK_URL, LARGE_UPLOAD_URL, SMALL_UPLOAD_URL};
+use crate::utils::auth::AuthSignature;
+use crate::utils::file_handler::{format_duration, FileUploadOrder, FileUploadOrderType, FinalStats, PreviewRow, UnifiedUploader};
 
 #[component]
-pub fn ModeSelector(mut mode: Signal<Mode>, mut form_data: Signal<HashMap<String, FormValue>>) -> Element {
-
-  // let mut files_uploaded = use_signal(|| Vec::new() as Vec<UploadedFile>);
+pub fn ModeSelector(mut mode: Signal<Mode>, mut form_data: Signal<HashMap<String, FormValue>>, mut is_valid_sim_settings: Signal<bool>) -> Element {
   
   let mut parsed_orders: Signal<Vec<FileUploadOrderType>> = use_signal(|| vec![]);
+  let mut large_file_contents: Signal<Vec<u8>> = use_signal(||vec![]);
+  let mut total_raw_orders: Signal<i32> = use_signal(|| 0);
+  let mut selected_file: Signal<Option<String>> = use_signal(||None);
+  let mut server_processing: Signal<Option<String>> = use_signal(||None);
+  let mut invalid_file: Signal<bool> = use_signal(||false);
+  let mut is_large_file: Signal<bool> = use_signal(||false);
+  let mut ob_results: Signal<Option<HashMap<String, FinalStats>>> = use_signal(||None);
+  let mut parse_results: Signal<Option<(Duration, i32, i32)>> = use_signal(||None);
 
-  let read_files = move |file_engine: Arc<dyn FileEngine>| async move {
-    let files = file_engine.files();
-    for file_name in &files {
-      if let Some(contents) = file_engine.read_file_to_string(&file_name).await {
-        // files_uploaded.write().push(UploadedFile { name: file_name.clone(), contents });
-        // info!("contents: {}", &contents);
-        for order in contents.lines() {
-          // info!("order: {}", order);
-          match FileUploadOrder::parse(order) {
-            Ok(valid_order) => {
-              parsed_orders.write().push(valid_order.order);
-            }
-            Err(e) => {
-              warn!("Parse error: {:?}", e);
+  // set max size to 5MB for which we show preview and do UI side order parsing 
+  const MAX_PREVIEWABLE_FILESIZE: u64 = 1024 * 1024 * 5;
+  let uploader = use_signal(||UnifiedUploader::new(reqwest::Client::new(), SMALL_UPLOAD_URL, LARGE_UPLOAD_URL, HEALTH_CHECK_URL).with_compression(true));
+
+  let read_files = move |file_engine: std::sync::Arc<dyn FileEngine>| async move {
+    let current_file_names = file_engine.files();
+    if current_file_names.len() > 0 {
+      
+      let file_name = &current_file_names[0];
+      selected_file.set(Some(file_name.clone()));
+
+      if !file_name.to_lowercase().ends_with(".txt") {
+        invalid_file.set(true);
+        //error!("file name doesnt end with .txt!");
+        return;
+      }
+
+      let file_size = file_engine.file_size(&file_name).await.expect("error getting uploaded file size!");
+
+      // parse small files client side
+      if file_size < MAX_PREVIEWABLE_FILESIZE {
+
+        if let Some(contents) = file_engine.read_file_to_string(&file_name).await {
+          for order in contents.lines() {
+            *total_raw_orders.write() += 1;
+            match FileUploadOrder::parse(order) {
+              Ok(valid_order) => parsed_orders.write().push(valid_order.order),
+              Err(_e) => {
+                //warn!("parse error: {:?}", e);
+                //*invalid_orders.write() += 1;
+              }
             }
           }
         }
-
+      } else {
+        //warn!("large file uploaded of size: {:?} bytes. No preview will be shown", file_size);
+        is_large_file.set(true);
+        if let Some(file_bytes) = file_engine.read_file(&file_name).await {
+          large_file_contents.set(file_bytes);
+        }
       }
     }
   };
 
-  let upload_files = move |evt: FormEvent| async move {  
+  let upload_files = move |evt: FormEvent| async move {
     if let Some(file_engine) = evt.files() {
-      info!("file engine .files(): {:?}", file_engine.files());
+      invalid_file.set(false);
+      is_large_file.set(false);
+      parsed_orders.write().clear();
+      large_file_contents.write().clear();
+      total_raw_orders.set(0);
+      selected_file.set(None);
+      ob_results.set(None);
+      parse_results.set(None);
       read_files(file_engine).await;
+      // clear file inputs to enable reupload of same file
+      if let Some(web_evt) = evt.try_as_web_event() {
+        if let Some(tar) = web_evt.target() {
+          if let Ok(input_element) = tar.dyn_into::<HtmlInputElement>() {
+            input_element.set_value("");
+          }
+        }
+      }
     }
-    info!("event values: {:?}", evt.value());
   };
-
-  let handle_click = move |evt| {
-    let z = evt.target();
-  };
-
-  use_effect(move || {
-    // let current_parsed_orders = parsed_orders.read();
-    for o in parsed_orders.read().iter() {
-      info!("order: {:?}", o);
-    }
-  });
 
   rsx! {
     div {
@@ -206,48 +107,187 @@ pub fn ModeSelector(mut mode: Signal<Mode>, mut form_data: Signal<HashMap<String
             style: "color: var(--text-muted)",
             "Configure simulation settings"
           },
-          SettingsPanel { name: "Simulation Settings", form_data }
+          SettingsPanel { name: "Simulation Settings", form_data, is_valid_sim_settings }
         }
       } else { 
-        /*Ver 2*/
-        button { 
-          onclick: move |_| parsed_orders.write().clear(),
-          "Clear files"
-        }
-        // document::eval(r#"
-        //             const handleClick = event => {
-        //               const { target = {} } = event || {};
-        //               target.value = "";
-        //             };
-        //         "#)
         form {
+          class: "file-upload-form",
+          enctype: "multipart/form-data",
+          onsubmit: move|_evt| async move {
+            let f_name = selected_file().expect("file name should exist here!");
+            //info!("[on submit] file name: {}", &f_name); 
+            server_processing.set(Some(f_name.clone()));
+            selected_file.set(None);
+
+            let upload_handler = uploader.read();
+            let auth_signer = AuthSignature::new().await.expect("failed to init the auth signature!");
+            // perform health check
+            if let Err(_e) = upload_handler.check_health().await {
+              //error!("health check error: {:?}", e);
+              document::eval(r#"
+              var x = document.getElementById("upload-server-down-toast");
+              x.classList.add("show");
+              setTimeout(function(){{x.classList.remove("show");}}, 2000);
+              "#);
+              server_processing.set(None);
+              return;
+            };
+
+            if !is_large_file() {
+              let current_orders = parsed_orders();
+              parsed_orders.write().clear();
+
+              if let Err(_e) = upload_handler.upload_small_file(current_orders, 10_000, auth_signer, ob_results).await {
+                //error!("[Small upload error] {}", e.to_string());
+                document::eval(r#"
+                var x = document.getElementById("upload-server-down-toast");
+                x.classList.add("show");
+                setTimeout(function(){{x.classList.remove("show");}}, 2000);
+                "#);
+              }
+            } else {
+              let current_lf_bytes = large_file_contents();
+              large_file_contents.write().clear();
+
+              if let Err(_e) = upload_handler.upload_large_file(current_lf_bytes, &f_name, auth_signer, ob_results, parse_results).await {
+                //error!("[Large upload error] {}", e.to_string());
+                document::eval(r#"
+                var x = document.getElementById("upload-server-down-toast");
+                x.classList.add("show");
+                setTimeout(function(){{x.classList.remove("show");}}, 2000);
+                "#);
+              };
+            }
+            server_processing.set(None);
+          },
           div {
-            label {
-              class: "upload-zone",
-              for: "file-upload",
-             "Choose order file to upload (TXT, CSV)",
+            class: "upload-container",
+            h3 { "Upload Text Files" }
+            p { class: "upload-subtitle", "Upload your .txt files for processing" }
+            div {
+              class: "upload-area",
+              id: "dropzone",
+              onmounted: move |_evt| {
+                document::eval(r#"
+                  var millis = 150;
+                  setTimeout(function() {{
+                     const dropZone = document.getElementById('dropzone');
+                     if (!dropZone) {console.warn('no drop zone found!');}
+                     dropZone.addEventListener('dragover', (e) => {
+                        e.preventDefault();
+                        dropZone.classList.add('dragover');
+                     });
+                      dropZone.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        dropZone.classList.remove('dragover');
+                      });
+                  }}, millis);
+                "#);
+              },
+
+              ondrop: move |evt| async move {
+                if let Some(file_engine) = evt.files() {
+                  invalid_file.set(false);
+                  is_large_file.set(false);
+                  parsed_orders.write().clear();
+                  large_file_contents.write().clear();
+                  total_raw_orders.set(0);
+                  selected_file.set(None);
+                  ob_results.set(None);
+                  parse_results.set(None);
+                  read_files(file_engine).await;
+                  // clear file inputs to enable reupload of same file
+                  if let Some(web_evt) = evt.try_as_web_event() {
+                    if let Some(tar) = web_evt.target() {
+                      if let Ok(input_element) = tar.dyn_into::<HtmlInputElement>() {
+                        input_element.set_value("");
+                      }
+                    }
+                  }
+                }
+              },
+              div { class: "upload-icon", "📄" }
+              p {class: "upload-text", "Drag & drop your text file here"}
+              p { "or" }
+              button {
+                type: "button",
+                id: "browse-button",
+                onclick: move |evt| {
+                  evt.prevent_default();
+                  document::eval(r#"
+                    const fileInput = document.getElementById('file-upload');
+                    fileInput.click();
+                  "#);
+                },
+                ondragover: move|evt| evt.prevent_default(),
+                ondrop: move|evt| evt.prevent_default(),
+                "Browse Files"
+              }
               input {
-                id: "file-upload",
-                // class: "hidden",
                 r#type: "file",
-                accept: ".txt,.csv",
-                oninput: upload_files,
-                onclick: handle_click
+                id: "file-upload",
+                class: "file-input",
+                accept: ".txt",
+                onchange: upload_files
               }
             }
-          },
-          div { 
-            class: "order-preview",
-            if parsed_orders.read().len() == 0 {
-              p {"No files currently selected for upload"}
-            } else {
-              PreviewTable { orders: parsed_orders() }
+            if let Some(file_name) = selected_file() {
+              div {
+                class: "file-info",
+                id: "fileInfo",
+                div {
+                  class: "file-name",
+                  span { id: "fileName", "{file_name}" }
+                  span {
+                    id: "removeFile",
+                    style: "cursor: pointer",
+                    onclick: move |_evt| selected_file.set(None),
+                    "✕"
+                  }
+                }
+              }
+              if !invalid_file() {
+                if !is_large_file() {
+                  if parsed_orders().len() > 0 {
+                    div { 
+                      button { 
+                        id : "file-upload-btn",
+                        r#type: "submit",
+                        "Submit"
+                      }
+                    }
+                  } else {
+                    div { class: "upload-err-msg parsedorders", "Found 0 valid orders from ""{total_raw_orders()}"" lines! Refer file format here." }
+                  }
+                } else {
+                  div { 
+                    button { 
+                      id : "file-upload-btn",
+                      r#type: "submit",
+                      "Submit"
+                    }
+                  }
+                  span {"No preview available for files > 5MB"}
+                }
+              } else {
+                div { class: "upload-err-msg fileformat", "Only .txt files are allowed!" }
+              }
             }
           }
-          div { 
-            button { "Submit" }
+          if selected_file().is_some() && !is_large_file() && parsed_orders().len() > 0 {
+            PreviewTable { orders: parsed_orders() }
           }
+          if let Some(f_name) = server_processing() { ProgressBar { f_name } }
         }
+        
+        if ob_results().is_some() {
+          ResultsTable { orders: ob_results().expect("results should exist here!") }
+        }
+        if parse_results().is_some() {
+          ParseTable { parse_results: parse_results().expect("parse results should exist here!") }
+        }
+        ErrorToast { id: "upload-server-down-toast", content: "SERVER IS DOWN! Try again later." }
+        ErrorToast { id: "upload-server-rl-toast", content: "Max order limit reached! Please try again in some time." }
       },
     }
   }
@@ -279,39 +319,119 @@ fn Tabs(mut mode: Signal<Mode>) -> Element {
   }
 }
 
-const GEAR_ICON: &str = r#"
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-"#;
-
 #[component]
-fn SettingsPanel(name: String, mut form_data: Signal<HashMap<String, FormValue>>) -> Element {
+fn SettingsPanel(name: String, mut form_data: Signal<HashMap<String, FormValue>>, mut is_valid_sim_settings: Signal<bool>) -> Element {
+
+  let mut order_str = use_signal(||"50000".to_string());
+  let mut mean_str = use_signal(||"250".to_string());
+  let mut sd_str = use_signal(||"20".to_string());
+  let mut add_prob_str = use_signal(||"0.0".to_string());
+  let mut modify_prob_str = use_signal(||"0.6".to_string());
+  let mut cancel_probs_str = use_signal(||"0.4".to_string());
+
+  use_effect(move|| {
+    let current_form_data = form_data();
+
+    if let Some(order) = current_form_data.get("orders") {
+      order_str.set(order.as_value());
+    };
+    if let Some(mean) = current_form_data.get("mean_price") {
+      mean_str.set(mean.as_value());
+    };
+    if let Some(sd) = current_form_data.get("sd_price") {
+      sd_str.set(sd.as_value());
+    };
+    if let Some(add_prob) = current_form_data.get("add_prob") {
+      add_prob_str.set(add_prob.as_value());
+    }
+    if let Some(modify_prob) = current_form_data.get("modify_prob") {
+      modify_prob_str.set(modify_prob.as_value());
+    }
+    if let Some(cancel_prob) = current_form_data.get("cancel_prob") {
+      cancel_probs_str.set(cancel_prob.as_value());
+    }
+  });
+  
   rsx!{
     div {
       class: "center mt-4",
       button {
-        class: "button settings-button",
-        onclick: move |_evt| {
+        class: "button button-sim-settings",
+        onclick: move |_evt| { 
           document::eval(r#"
               const panel = document.getElementById('simulation-settings-panel');
               panel.classList.toggle('hidden');
+              const simStartBtn = document.getElementById('sim-start-btn');
+              simStartBtn.classList.toggle('hidden');
               "#);
         },
         div {
-          dangerous_inner_html: GEAR_ICON,
-          class: "gear-icon"
+          class: "gear-icon",
+          svg {
+            xmlns: "http://www.w3.org/2000/svg",
+            width: "24",
+            height: "24",
+            view_box: "0 0 24 24",
+            fill: "none",
+            stroke: "currentcolor",
+            stroke_width: "2",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            path {
+              d: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+            },
+            circle { cx: "12", cy: "12", r: "3" }
+          }
         }
         {name}
       }
     },
     div {
+      class: "param-display",
+      div {
+        class: "param-display-header",
+        span { class: "param-display-title", "Current Simulation Parameters" }
+      }
+      div { 
+        class: "param-badges",
+        div {
+          class: "param-badge",
+          span { class: "param-badge-label", "Orders:" }
+          span { class: "param-badge-value", {order_str} }
+        }
+        div {
+          class: "param-badge",
+          span { class: "param-badge-label", "Mean Price:" }
+          span { class: "param-badge-value", {mean_str} }
+        }
+        div {
+          class: "param-badge",
+          span { class: "param-badge-label", "Variation:" }
+          span { class: "param-badge-value", {sd_str} }
+        }
+        div {
+          class: "param-badge",
+          span { class: "param-badge-label", "ADD:" }
+          span { class: "param-badge-value", {add_prob_str} }
+        }
+        div {
+          class: "param-badge",
+          span { class: "param-badge-label", "MODIFY:" }
+          span { class: "param-badge-value", {modify_prob_str} }
+        }
+        div {
+          class: "param-badge",
+          span { class: "param-badge-label", "CANCEL:" }
+          span { class: "param-badge-value", {cancel_probs_str} }
+        }
+      }
+    }
+    div {
       id: "simulation-settings-panel",
       class: "settings-panel hidden mt-4",
-      Dialog { form_data }
-    },
-    div {
-      id: "toast",
-      "Settings saved successfully"
-    }   
+      Dialog { form_data, is_valid_sim_settings }
+    }, 
+    SuccessToast { id: "settings-toast", content: "Settings saved successfully" }
   }
 }
 
@@ -319,8 +439,8 @@ fn SettingsPanel(name: String, mut form_data: Signal<HashMap<String, FormValue>>
 fn PreviewTable(orders: Vec<FileUploadOrderType>) -> Element {
 
   let len: usize = orders.len();
-  let max: usize = 10;
-  // we add 2 middle rows for ellipsis
+  let max: usize = 5;
+  // add 2 middle rows (...) for ellipsis
   let mut preview_rows: Vec<PreviewRow> = Vec::with_capacity((2*max)+2);
 
   if len <= 2*max {
@@ -332,7 +452,7 @@ fn PreviewTable(orders: Vec<FileUploadOrderType>) -> Element {
     for (idx, order) in (0..).zip(orders.iter().take(max)) {
       preview_rows.push(get_preview_row(idx, order));
     }
-    // 2 ellipsis rows
+    // ... rows
     let ellipsis_row_id1 = format!("preview-row-{}", max);
     let ellipsis_row_id2 = format!("preview-row-{}", max+1);
     preview_rows.push(PreviewRow { row_id: ellipsis_row_id1, ordertype: "⋮".to_string(), order_id: "⋮".to_string(), side: "⋮".to_string(), shares: "⋮".to_string(), price: "⋮".to_string() });
@@ -345,15 +465,18 @@ fn PreviewTable(orders: Vec<FileUploadOrderType>) -> Element {
   
   rsx! {
     table {
-      class: "upload-preview",
-      tbody {
+      class: "upload-preview-table",
+      caption { "File preview" }
+      thead {
         tr {
-          th { scope:"col", "OrderType" },
+          th { scope:"col", "Order Type" },
           th { scope:"col", "ID" },
           th { scope:"col", "Side" },
           th { scope:"col", "Shares" },
           th { scope:"col", "Price" },
         }
+      }
+      tbody {
         for row in preview_rows {
           tr {
             key: "{row.row_id}",
@@ -369,7 +492,6 @@ fn PreviewTable(orders: Vec<FileUploadOrderType>) -> Element {
   }
 }
 
-
 fn get_preview_row(idx:usize, order: &FileUploadOrderType) -> PreviewRow {
   let row_id = format!("preview-row-{idx}");
   match order {
@@ -377,6 +499,171 @@ fn get_preview_row(idx:usize, order: &FileUploadOrderType) -> PreviewRow {
     },
     FileUploadOrderType::Modify { id, shares, price } => PreviewRow { row_id, ordertype: "MODIFY".to_string(), order_id: id.to_string(), side: "-".to_string() , shares: shares.to_string(), price: price.to_string() },
     FileUploadOrderType::Cancel { id } => PreviewRow { row_id, ordertype: "CANCEL".to_string(), order_id: id.to_string(), side: "-".to_string() , shares: "-".to_string(), price: "-".to_string() }
-    
+  }
+}
+
+#[component]
+fn ResultsTable(orders: HashMap<String, FinalStats>) -> Element {
+
+  struct FormattedStats { total_time: String, avl_rebalances: i64, executed_orders_cnt: i64, nos: i64 }
+  
+  let cumlative_stats = orders.values().fold(FinalStats {
+    total_time: Duration::new(0, 0),
+    avl_rebalances: 0,
+    executed_orders_cnt: 0,
+    nos: 0}, |acc, stats| acc.add(stats));
+
+  let cumlative_formatted_stats = FormattedStats { 
+    total_time: format_duration(cumlative_stats.total_time), avl_rebalances: cumlative_stats.avl_rebalances,
+    executed_orders_cnt: cumlative_stats.executed_orders_cnt,
+    nos: cumlative_stats.nos
+  };
+
+  let mut formatted_orders: HashMap<String, FormattedStats> = HashMap::new();
+
+  for (key, stats) in &orders {
+    let formatted_time = format_duration(stats.total_time);
+    formatted_orders.insert(
+      key.to_string(), FormattedStats { 
+        total_time: formatted_time,
+        avl_rebalances: stats.avl_rebalances,
+        executed_orders_cnt: stats.executed_orders_cnt,
+        nos: stats.nos 
+      }
+    );
+  }
+
+  rsx! {
+    table { 
+      class: "upload-results-table ob",
+      caption { "Orderbook results" }
+      thead { 
+        tr { 
+          th {
+            scope: "col",
+            rowspan: "2",
+            "Order Type"
+          },
+          th {
+            scope: "col",
+            rowspan: "2",
+            "Order Count"
+          },
+          th {
+            scope: "col",
+            colspan: "3",
+            "Order Book Stats"
+          },
+        },
+        tr { 
+          th { 
+            scope: "col",
+            "AVL Rebalances"
+          },
+          th { 
+            scope: "col",
+            "Trades Executed"
+          },
+          th { 
+            scope: "col",
+            "Execution Time"
+          }
+        }
+       }
+       tbody { 
+        for (key, stats) in formatted_orders {
+          tr { 
+            key: "{key}-result",
+            th { scope: "row", "{key}" },
+            td { "{stats.nos}" },
+            td { "{stats.avl_rebalances}" },
+            td { "{stats.executed_orders_cnt}" },
+            td { "{stats.total_time}" },
+          }
+        }
+      }
+      tfoot { 
+        tr {
+          th { scope: "row", colspan: "1", "Total" },
+          td { "{cumlative_formatted_stats.nos}" },
+          td { "{cumlative_formatted_stats.avl_rebalances}" },
+          td { "{cumlative_formatted_stats.executed_orders_cnt}" },
+          td { "{cumlative_formatted_stats.total_time}" }
+        }
+      }
+    }
+  }
+}
+
+#[component]
+fn ParseTable(parse_results: (Duration, i32, i32)) -> Element {
+  
+  let (t, lines, invalid_orders) = parse_results;
+  let formatted_time = format_duration(t);
+  let valid_orders = lines - invalid_orders;
+
+  rsx! {
+    table {
+      class: "upload-results-table parse",
+      caption { "File parsing results" }
+      thead { 
+        tr { 
+          th {
+            scope: "col",
+            "Total parsed lines"
+          },
+          th {
+            scope: "col",
+            "Valid Orders"
+          },
+          th {
+            scope: "col",
+            "Invalid Orders"
+          },
+          th {
+            scope: "col",
+            "Time"
+          }
+        }
+      }
+      tbody { 
+        tr {
+          td { "{lines}" },
+          td { "{valid_orders}" },
+          td { "{invalid_orders}" },
+          td { "{formatted_time}" }
+        }
+      }
+    }
+  }
+}
+
+#[component]
+fn ProgressBar(f_name: String) -> Element {
+  rsx! {
+    div {
+      class: "upload-file-proc-container",
+      div {
+        class: "upload-file-proc-label",
+        "UPLOADING FILE"
+      }
+      div {
+        class: "progress-container",
+        div {
+          class: "indeterminate-progress-bar"
+        }
+      }
+      div {
+        class: "upload-file-proc-status",
+        span { "Processing..." }
+      }
+      div {
+        class: "upload-file-details",
+        div { 
+          class: "upload-file-name",
+          {f_name}
+        }
+      }
+    }
   }
 }
