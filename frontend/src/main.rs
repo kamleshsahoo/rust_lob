@@ -5,7 +5,7 @@ mod utils;
 
 use components::{accordion::SimLayout, template::Template};
 use dioxus::prelude::*;
-use pages::{simulator::Simulator, home::Home, docs::{Docs, FrontDocs}};
+use pages::{simulator::Simulator, home::Home, docs::{EngineDocs, BackDocs, FrontDocs}};
 
 #[derive(Routable, PartialEq, Clone)]
 enum Route {
@@ -14,8 +14,10 @@ enum Route {
     Home {},
     #[nest("/docs")]
         #[route("/")]
-        Docs {},
-        #[route("/front")]
+        EngineDocs {},
+        #[route("/backend")]
+        BackDocs {},
+        #[route("/frontend")]
         FrontDocs {},
     #[end_nest]
     #[layout(SimLayout)]
