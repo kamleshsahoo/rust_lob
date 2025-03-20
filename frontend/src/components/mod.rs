@@ -1,4 +1,6 @@
 pub mod formDialog;
+pub mod toast;
+pub mod accordion;
 pub mod orderbook;
 pub mod trades;
 pub mod plot_rt;
