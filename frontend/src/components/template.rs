@@ -1,12 +1,6 @@
 use dioxus::prelude::*;
 use crate::Route;
 
-// const MENU_ICON: &str = r#"
-// <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-list" viewBox="0 0 16 16">
-//   <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
-// </svg>
-// "#;
-
 #[component]
 pub fn Template() -> Element {
   static CSS: Asset = asset!("assets/template.css");
@@ -19,9 +13,22 @@ pub fn Template() -> Element {
   }
 }
 
-
 #[component]
 fn Header() -> Element {
+
+  use_effect(move|| {
+    document::eval(r#"
+    const menuToggle = document.getElementById('menuToggle');
+    const navLinks = document.getElementById('navLinks');
+    // Close mobile menu when clicking outside
+    document.addEventListener('click', function(event) {{
+      if (!navLinks.contains(event.target) && !menuToggle.contains(event.target)) {{
+        navLinks.classList.remove('active');
+        }}
+      }});
+    "#);
+  });
+
   rsx!{
     nav {
       div {
@@ -32,8 +39,14 @@ fn Header() -> Element {
           to: Route::Home { },
           "Home",
         }
-        button { 
+        button {
+          id: "menuToggle", 
           class: "menu-button",
+          onclick: move|_evt| {
+            document::eval(r#"
+            document.getElementById('navLinks').classList.toggle('active');
+            "#);
+          },
           span {
             class: "menu-icon",
             svg {
@@ -59,16 +72,31 @@ fn Header() -> Element {
           }
         },
         div {
+          id: "navLinks",
           class: "nav-links",
           Link {
             active_class: "nav-active",
             to: Route::Simulator { },
+            onclick: move|_| { document::eval(r#"document.getElementById('navLinks').classList.remove('active');"#); },
             "Simulator"
           },
           Link {
             active_class: "nav-active",
-            to: Route::Docs {  },
-            "Documentation"
+            to: Route::EngineDocs { },
+            onclick: move|_| { document::eval(r#"document.getElementById('navLinks').classList.remove('active');"#); },
+            "Engine"
+          },
+          Link {
+            active_class: "nav-active",
+            to: Route::BackDocs { },
+            onclick: move|_| { document::eval(r#"document.getElementById('navLinks').classList.remove('active');"#); },
+            "Backend"
+          },
+          Link {
+            active_class: "nav-active",
+            to: Route::FrontDocs { },
+            onclick: move|_| { document::eval(r#"document.getElementById('navLinks').classList.remove('active');"#); },
+            "Frontend"
           },
         }
       }
