@@ -1,11 +1,13 @@
-use std::{collections::HashMap, fmt, str::FromStr, sync::Arc, time::Duration};
-use dioxus::logger::tracing::info;
-use dioxus::{logger::tracing::warn, prelude::*};
-use dioxus::html::FileEngine;
+use dioxus::prelude::*;
+use rmp_serde::Serializer;
+use std::{collections::HashMap, fmt, io::Write, str::FromStr, time::Duration};
+use flate2::{write::DeflateEncoder, Compression};
+use reqwest::multipart::{Form, Part};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-
+use super::{auth::AuthSignature, server::{AppError, HealthCheckResponse, LargeUploadResponse, SmallUploadRequest, SmallUploadResponse}};
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct FinalStats {
@@ -25,7 +27,7 @@ pub fn format_duration(duration: Duration) -> String {
   } else if nanos >= 1_000_000 {
     // milliseconds
     let millis = duration.as_secs_f64() * 1_000.0;
-    format!("{:.3} ms", millis)    
+    format!("{:.2} ms", millis)    
   } else if nanos >= 1_000 {
     // microseconds
     let micros = duration.as_secs_f64() * 1_000_000.0;
@@ -46,30 +48,6 @@ impl FinalStats {
     }
   }
 }
-
-#[derive(Debug, Deserialize)]
-pub struct UploadResponse {
-  // success: bool,
-  pub data: Option<HashMap<String, FinalStats>>,
-  pub session_id: Option<String>,
-  // error_msg: Option<String>  
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LargeUploadResponse {
-  pub orderbook_results: HashMap<String, FinalStats>,
-  pub parse_results: (Duration, i32, i32)
-}
-
-#[derive(Debug, Serialize)]
-pub struct UploadRequest {
-  pub session_id: Option<String>,
-  pub total_chunks: usize,
-  pub total_orders: usize,
-  pub chunk_number: usize,
-  pub orders: Vec<FileUploadOrderType>
-}
-
 
 pub struct PreviewRow {
   pub row_id: String,
@@ -236,27 +214,189 @@ impl FileUploadOrder {
   }
 }
 
-// pub async fn read_files(file_engine: Arc<dyn FileEngine>, mut parsed_orders: Signal<Vec<FileUploadOrderType>>,
-// mut total_raw_orders: Signal<i32>, mut invalid_orders: Signal<i32>) {
-//   let files = file_engine.files();
-//   for file_name in &files {
-//     let size = file_engine.file_size(&file_name).await.unwrap();
-//     info!("file size for {:?}: {:?}", &file_name, size);
-//     if let Some(contents) = file_engine.read_file_to_string(&file_name).await {
-//       // info!("contents: {}", &contents);
-//       for order in contents.lines() {
-//         // info!("order: {}", order);
-//         *total_raw_orders.write() += 1;
-//         match FileUploadOrder::parse(order) {
-//           Ok(valid_order) => {
-//             parsed_orders.write().push(valid_order.order);
-//           }
-//           Err(e) => {
-//             warn!("Parse error: {:?}", e);
-//             *invalid_orders.write() += 1;
-//           }
-//         }
-//       }
-//     }
-//   }
-// }
+// Upload Handler
+pub struct UnifiedUploader {
+  client: reqwest::Client,
+  small_upload_url: String,
+  large_upload_url: String,
+  health_check_url: String,
+  chunk_size: usize,
+  compression_enabled: bool
+}
+
+impl UnifiedUploader {
+  pub fn new(client: reqwest::Client, small_url: &str, large_url: &str, health_url: &str) -> Self {
+    Self {
+      client,
+      small_upload_url: small_url.to_string(),
+      large_upload_url: large_url.to_string(),
+      health_check_url: health_url.to_string(),
+      chunk_size: 8 * 1024 * 1024, // default chunk size of 8MB
+      compression_enabled: false // compression in not enabled by default
+    }
+  }
+
+  pub fn with_chunk_size(mut self, size: usize) -> Self {
+    self.chunk_size = size;
+    self
+  }
+
+  pub fn with_compression(mut self, enabled: bool) -> Self {
+    self.compression_enabled = enabled;
+    self
+  }
+
+  pub async fn check_health(&self) -> Result<(), AppError> {
+    let resp = self.client.get(&self.health_check_url).send().await.map_err(|e| AppError::ServerUnhealthy(e.to_string()))?;
+    let _json_resp = resp.json::<HealthCheckResponse>().await.map_err(|e| AppError::DeserializeError(e.to_string()))?;
+    //info!("health check for upload succeeded with: {:?}", json_resp);
+    Ok(())
+  }
+
+  pub async fn upload_large_file(&self,
+    file_bytes: Vec<u8>,
+    f_name: &str,
+    auth_signer: AuthSignature,
+    mut ob_results: Signal<Option<HashMap<String, FinalStats>>>,
+    mut parse_results: Signal<Option<(Duration, i32, i32)>>
+  ) -> Result<(), AppError> {
+    let total_bytes = file_bytes.len();
+    //info!("**large file total bytes: {}", &total_bytes);
+    let total_chunks = (total_bytes + self.chunk_size - 1) / self.chunk_size;
+    //info!("**total chunks: {}", &total_chunks);
+
+    let session_id = Uuid::new_v4().to_string();
+
+    for chunk_number in 0..total_chunks {
+      //info!(">>lf chunk: {}", &chunk_number);
+      let start = chunk_number * self.chunk_size;
+      let end = std::cmp::min(start + self.chunk_size, total_bytes);
+      let chunk = &file_bytes[start..end];
+
+      let (final_chunk, content_encoding) = if self.compression_enabled {
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(chunk).map_err(|e| AppError::CompressionError(e.to_string()))?;
+        (encoder.finish().map_err(|e| AppError::CompressionError(e.to_string()))?, Some("deflate"))
+      } else {
+        (chunk.to_vec(), None)
+      };
+
+      //info!("size of lf chunk:{}", std::mem::size_of_val(&*final_chunk));
+      let part = Part::bytes(final_chunk)
+        .file_name(format!("{}_chunk_{}", &f_name, &chunk_number))
+        //.mime_str(&f_type)
+        .mime_str("application/octet-stream")
+        .map_err(|e| AppError::ReqwestError(e.to_string()))?;
+      
+      let form = Form::new().
+        text("session_id", session_id.clone()).
+        text("total_chunks", total_chunks.to_string()).
+        text("chunk_number", chunk_number.to_string()).  
+        part("chunk", part);
+
+      let mut req = self.client.post(&self.large_upload_url).multipart(form);
+      if let Some(encoding) = content_encoding {
+        req = req.header("content-encoding", encoding);
+      }
+
+      let timestamp = (js_sys::Date::now() / 1000.0) as u64;
+      let signature = auth_signer.sign_with_key("/largeupload", timestamp).await?;
+
+      req = req.header("x-timestamp", timestamp.to_string())
+        .header("x-signature", signature);
+
+      let resp = req.send().await.map_err(|e| AppError::UploadConnectionError(e.to_string()))?;
+
+      if !resp.status().is_success() {
+        // let status = resp.status();
+        // let error_body = resp.text().await.map_err(|e| AppError::ReqwestError(e.to_string()))?;
+        //error!("status code: {}, body: {}", status.as_str(), &error_body);
+        //TODO: show different toast depending on errors
+        document::eval(r#"
+        var x = document.getElementById("upload-server-rl-toast");
+        x.classList.add("show");
+        setTimeout(function(){{x.classList.remove("show");}}, 2000);
+        "#);
+        break;
+      } else {
+        if chunk_number == total_chunks - 1 {
+          let result = resp.json::<LargeUploadResponse>().await.map_err(|e| AppError::DeserializeError(e.to_string()))?;
+          //info!("Processing complete for large file:\n{:?}", &result);
+          assert_eq!(true, result.processed, "processing should be complete here!!");
+          ob_results.set(result.orderbook_results);
+          parse_results.set(result.parse_results);
+        }
+      }
+    }
+    Ok(())
+  }
+
+  pub async fn upload_small_file(&self,
+    orders: Vec<FileUploadOrderType>,
+    chunk_size: usize,
+    auth_signer: AuthSignature,
+    mut ob_results: Signal<Option<HashMap<String, FinalStats>>>
+  ) -> Result<(), AppError> {
+    let total_orders = orders.len();
+    let total_chunks = if total_orders % chunk_size == 0 {total_orders/chunk_size} else { (total_orders / chunk_size) + 1 };
+
+    let session_id = Uuid::new_v4().to_string();
+
+    for (chunk_number, chunk) in orders.chunks(chunk_size).enumerate() {
+      //info!(">>sf chunk: {}", &chunk_number);
+      let upload_request = SmallUploadRequest {
+        session_id: session_id.clone(),
+        total_chunks,
+        total_orders,
+        chunk_number,
+        orders: chunk.to_vec()
+      };
+
+      let mut buf = Vec::new();
+      upload_request.serialize(&mut Serializer::new(&mut buf)).map_err(|e| AppError::SerializeError(e.to_string()))?;
+
+      let (final_data, content_encoding) = if self.compression_enabled {
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&buf).map_err(|e| AppError::CompressionError(e.to_string()))?;
+        (encoder.finish().map_err(|e| AppError::CompressionError(e.to_string()))?, Some("deflate"))
+      } else {
+        (buf, None)
+      };
+      //info!("size of sf chunk:{}", std::mem::size_of_val(&*final_data));
+
+      let mut req = self.client.post(&self.small_upload_url).body(final_data);
+      if let Some(encoding) = content_encoding {
+        req = req.header("content-encoding", encoding);
+      }
+
+      let timestamp = (js_sys::Date::now() / 1000.0) as u64;
+      let signature = auth_signer.sign_with_key("/smallupload", timestamp).await?;
+
+      req = req.header("x-timestamp", timestamp.to_string())
+        .header("x-signature", signature);
+
+      let resp = req.send().await.map_err(|e| AppError::UploadConnectionError(e.to_string()))?;
+
+      if !resp.status().is_success() {
+        // let status = resp.status();
+        // let error_body = resp.text().await.map_err(|e| AppError::ReqwestError(e.to_string()))?;
+        //TODO: show different toast depending on errors
+        //error!("status code: {}, body: {}", status.as_str(), &error_body);
+        document::eval(r#"
+        var x = document.getElementById("upload-server-rl-toast");
+        x.classList.add("show");
+        setTimeout(function(){{x.classList.remove("show");}}, 2000);
+        "#);
+        break;
+      } else {
+        if chunk_number == total_chunks - 1 {
+          let result = resp.json::<SmallUploadResponse>().await.map_err(|e| AppError::DeserializeError(e.to_string()))?;
+          //info!("Processing complete for small file:\n{:?}", &result);
+          assert_eq!(true, result.processed, "processing should be complete here!!");
+          ob_results.set(result.orderbook_results);
+        }
+      }
+    }
+    Ok(())
+  }
+}
