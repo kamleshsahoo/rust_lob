@@ -1,24 +1,22 @@
 use std::{collections::{BTreeMap, HashMap}, io::Read};
-use dioxus::{logger::tracing::{info, warn, error}, prelude::*};
+use dioxus::{logger::tracing::info, prelude::*};
 use flate2::read::DeflateDecoder;
-use gloo_net::websocket::{futures::WebSocket, Message};
+use gloo_net::websocket::{futures::WebSocket, Message, WebSocketError};
 use futures_util::StreamExt;
 use futures::{stream::SplitSink, SinkExt};
 use tokio::sync::mpsc::Sender;
-
 
 use crate::{
   pages::simulator::{DataUpdate, EngineStats, ExecutedOrders, View, HEALTH_CHECK_URL, WSS_URL},
   utils::{enginestats::get_cumlative_results, server::{HealthCheckResponse, AppError, WsRequest, WsResponse}}
 };
-
-// static WS: GlobalSignal<Option<SplitSink<WebSocket, Message>>> = Signal::global(||None);
+use super::auth::AuthSignature;
 
 // helper to decompress data
 fn decompress_data(data: &[u8]) -> Result<String, AppError> {
   let mut decoder = DeflateDecoder::new(data);
   let mut decompressed = String::new();
-  decoder.read_to_string(&mut decompressed).map_err(|e| AppError::DecompressionFailed(e.to_string()))?;
+  decoder.read_to_string(&mut decompressed).map_err(|e| AppError::DecompressionError(e.to_string()))?;
   Ok(decompressed)
 }
 
@@ -37,46 +35,58 @@ pub async fn handle_websocket(start_payload: Message,
 
   match reqwest::get(HEALTH_CHECK_URL).await {
     Ok(r) => {
-        let json_response = r.json::<HealthCheckResponse>().await.expect("failed to deserialize healthcheck response");
-        info!("health check succeeded with status: {}", json_response.code);
+      let _json_response = r.json::<HealthCheckResponse>().await.expect("failed to deserialize healthcheck response");
+      //info!("health check for ws succeeded with: {:?}", json_response);
     },
-    Err(e) => {
-        return Err(AppError::ServerUnhealthy(e.to_string()))
-    }
+    Err(e) => return Err(AppError::ServerUnhealthy(e.to_string()))
   };
-  
-  let ws = WebSocket::open(WSS_URL).map_err(|e| AppError::WsConnectionError(e.to_string()))?;
+
+  let auth_signer = AuthSignature::new().await?;
+  let timestamp = (js_sys::Date::now() / 1000.0) as u64;
+  let signature = auth_signer.sign_with_key("/wslob", timestamp).await?;
+
+  let ws_sec_protocols = [&timestamp.to_string(), &signature];
+  let ws = WebSocket::open_with_protocols(WSS_URL, &ws_sec_protocols).map_err(|e| AppError::WsConnectionError(e.to_string()))?;
 
   let(mut write, mut read) = ws.split();
+  
   match write.send(start_payload).await {
     Ok(_) => { 
-        info!("START payload sent succ to server");
-        // feed_killed.set(false);
-        // view.set(View::Execution);
+      info!("Ws START payload sent to server");
     },
-    Err(e) => return Err(AppError::ConnectionFailed(e.to_string()))
-    // error!("error {:?} occ sending START msg to server", e)
-  }; 
+    Err(e) => return Err(AppError::WsConnectionError(e.to_string()))
+  };
 
-  // store the conn in global signal
-  *ws_conn.write() = Some(write);
-  
-  // Flag to track if we've received the first valid message
+  // Flag to track to track first valid msg received
   let mut first_valid_message_received = false;
+  // store the write part of connection in signal
+  *ws_conn.write() = Some(write);
 
-  // Receiving from backend axum server
-  while let Some(Ok(server_msg)) = read.next().await {
-    match server_msg {
-      Message::Text(s) => {
-        // info!("server text msg size: {:?}", std::mem::size_of_val(&*s));
-        let batch = serde_json::from_str::<Vec<Vec<WsResponse>>>(&s).expect("error deserializing orderbook updates from server!");
-        process_updates(batch, &mut first_valid_message_received, &mut ws_conn, &update_tx, &mut sim_completed, &mut feed_killed, &mut view, &all_engine_stats, &all_executed_orders, &mut cuml_latency, &mut cuml_latency_by_ordertype, &mut cuml_latency_by_avl_trade, &qvals).await?;
+  // NOTE: we are not handling None case because the .next() returns None when
+  // no more msgs are left in the stream, so probably fine to ignore it
+  while let Some(msg_response) = read.next().await {
+    match msg_response {
+      Ok(server_msg) => {
+        let batch: Vec<Vec<WsResponse>> = match server_msg {
+          Message::Text(string_data) => serde_json::from_str::<Vec<Vec<WsResponse>>>(&string_data).map_err(|e| AppError::DeserializeError(e.to_string()))?,
+          Message::Bytes(compressed_byte_data) => {
+            let decompressed = decompress_data(&compressed_byte_data)?;
+            serde_json::from_str::<Vec<Vec<WsResponse>>>(&decompressed).map_err(|e| AppError::DeserializeError(e.to_string()))?
+          }
+        };
+        // process the batch
+        process_updates(batch, &mut first_valid_message_received, &mut ws_conn, &update_tx, &mut sim_completed, &mut feed_killed, &mut view, &all_engine_stats, &all_executed_orders, &mut cuml_latency, &mut cuml_latency_by_ordertype, &mut cuml_latency_by_avl_trade, &qvals).await?
       },
-      Message::Bytes(compressed_data) => {
-        // info!("server byte msg size: {:?}", std::mem::size_of_val(&*compressed_data));
-        let decompressed = decompress_data(&compressed_data)?;
-        let batch = serde_json::from_str::<Vec<Vec<WsResponse>>>(&decompressed).expect("error deserializing decompressed orderbook updates from server!");
-        process_updates(batch, &mut first_valid_message_received, &mut ws_conn, &update_tx, &mut sim_completed, &mut feed_killed, &mut view, &all_engine_stats, &all_executed_orders, &mut cuml_latency, &mut cuml_latency_by_ordertype, &mut cuml_latency_by_avl_trade, &qvals).await?;
+      Err(e) => {
+        match e {
+          WebSocketError::ConnectionClose(close_evt) => {
+            info!("Ws connection closed by server : {:?}", close_evt)
+          },
+          _ => {
+            //error!("Ws error {:?}", e);
+            return Err(AppError::AuthorizationError(format!("Ws connection rejected with {:?}", e)));
+          }
+        }
       }
     }
   }
@@ -124,7 +134,7 @@ async fn process_updates(batch: Vec<Vec<WsResponse>>,
             update_tx.send(DataUpdate::BestPrices { best_buy, best_sell }).await.map_err(|e| AppError::WsChannelError(e.to_string()))?;
           },
           WsResponse::Completed => {
-            info!("setting sim completed to true!");
+            //info!("setting sim completed to true!");
             let ack_msg = serde_json::to_string(&WsRequest::Ack).expect("error serializing acknowledgement message!");
             if let Some(mut w) = ws_conn.write().take() {
               w.send(Message::Text(ack_msg)).await.map_err(|e| AppError::WsConnectionError(e.to_string()))?;
