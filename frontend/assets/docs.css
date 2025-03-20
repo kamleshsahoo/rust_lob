@@ -2,6 +2,8 @@
   padding: 20px;
   line-height: 1.5;
   text-align: justify;
+  max-width: 1000px;
+  margin: 0 auto;
   /* background-color: #1e1e1e; 
   color: #e0e0e0;  */
   h1,
@@ -10,13 +12,35 @@
     color: #ffffff; /* White for headings */
   }
 
-
-
   .docs-header h1 {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 10px;
+  }
+
+  .gif-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: none;
+    padding: 5px;
+    margin-top: 20px;
+    gap: 20px;
+    overflow-x: auto;
+  }
+
+  .gif-item figcaption{
+    text-align: center;
+    color: wheat;
+    font-style: italic;
+    padding: 2px;
+  }
+
+  .gif-item img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
   }
 
   .rust-logo {
@@ -33,6 +57,7 @@
 
   ul, ol {
     padding-left: 20px;
+    margin-bottom: 5px;
   }
 
   h1 {

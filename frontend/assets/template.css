@@ -20,7 +20,7 @@
   --avl-color: #e9d6f1;
 
   --accent-primary: #8a2be2;
-  --accent-secondary: #4d4dff;
+  --accent-secondary: #2563eb;
 
   --text-primary: #c9d1d9;
   --text-secondary: #8b949e;
@@ -29,6 +29,7 @@
   --success-base: #10b981;       
   /* --warning: #f59e0b;            
   --info: #3b82f6;  */
+  --transition: all 0.3s ease;
 }
 
 * {

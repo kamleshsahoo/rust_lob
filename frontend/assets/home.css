@@ -1,0 +1,121 @@
+.home-page {
+  margin: 0 auto;
+  padding: 0 20px;
+  max-width: 1000px;
+  min-height: 90vh;
+}
+
+.hero {
+  text-align: center;
+  padding: 4rem 0;
+  animation: fadeIn 1s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero h1 {
+  font-size: 2.8rem;
+  margin-bottom: 20px;
+  background: linear-gradient(
+    90deg,
+    var(--accent-primary),
+    var(--accent-secondary)
+  );
+  background-clip: text;
+  line-height: 1.2;
+  -webkit-text-fill-color: transparent;
+}
+
+.hero p {
+  font-size: 1.2rem;
+  color: var(--text-secondary);
+  /* max-width: 700px; */
+  margin: 0 auto;
+  margin-bottom: 30px;
+  line-height: 1.6;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 30px;
+  padding: 50px 0 80px;
+}
+
+.feature-card {
+  background-color: var(--bg-secondary);
+  padding: 30px;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(172, 162, 162, 0.2);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.feature-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 8px 25px rgba(172, 162, 162, 0.3);
+}
+
+.feature-card-title {
+  color: var(--accent-primary);
+  font-size: 1.4rem;
+  margin-bottom: 1rem;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.feature-card p {
+  line-height: 1.6;
+  color: #b3b3b3;
+}
+
+.cta-button {
+  display: inline-block;
+  margin-top: 1.5rem;
+  padding: 15px 30px;
+  text-decoration: none;
+  background: linear-gradient(135deg, #8a2be2, #6a1cb0);
+  color: white;
+  border: 1px solid #6a1cb0;
+  box-shadow: 0 4px 12px rgba(138, 43, 226, 0.25);
+  border-radius: 5px;
+  font-weight: bold;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.cta-button:hover {
+  background: linear-gradient(135deg, #b14cff, #8a2be2);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(138, 43, 226, 0.35);
+}
+
+.cta-button:active {
+  transform: translateY(0);
+}
+
+@media screen and (max-width: 568px) {
+  .home-page {
+    padding: 1rem;
+  }
+  .hero h1 {
+    font-size: 2rem;
+    padding: 0 1rem;
+  }
+  .hero p {
+    font-size: 1rem;
+    padding: 0 1rem;
+  }
+  .features {
+    grid-template-columns: 1fr;
+    padding: 0 1rem;
+  }
+}
