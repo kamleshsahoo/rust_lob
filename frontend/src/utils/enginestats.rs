@@ -1,12 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 use charming::datatype::{CompositeValue, DataPoint, NumericValue};
-use dioxus::logger::tracing::info;
-//use dioxus::logger::tracing::info;
 use crate::pages::simulator::{EngineStats, ExecutedOrders};
 
-/* Per order we get 
-{order_type:"ADD"/"MODIFY"/"CANCEL", latency, avl_rebalances, executed_orders_cnt}
-*/
+// Response format
+// {order_type:"ADD"/"MODIFY"/"CANCEL", latency, avl_rebalances, executed_orders_cnt}
 
 fn mean(vec: &Vec<i64>) -> f64 {
   let n = vec.len();
@@ -102,7 +99,6 @@ struct Bin {
     count: usize,
 }
 
-
 #[derive(Debug)]
 enum BinRange {
     Fixed(i64, i64),  // [lower, upper)
@@ -179,9 +175,8 @@ pub fn bar3d_data(data: &BTreeMap<(i64, i64), f64>) -> Vec<Vec<CompositeValue>> 
 }
 
 pub fn get_cumlative_results(engine_stats: Vec<EngineStats>, executed_orders: Vec<ExecutedOrders>, qvals: Vec<f64>) -> (Vec<i64>, HashMap<String, Vec<f64>>, BTreeMap<(i64, i64), f64>) {
-  info!("Simulation complete. Computing cumlative results");
-  info!("engine stats vec len: {:?} trades: {:?}", engine_stats.len(), executed_orders.len());
-
+  //info!("Simulation complete. Computing cumlative results");
+  //info!("engine stats vec len: {:?} trades: {:?}", engine_stats.len(), executed_orders.len());
   let latencies = engine_stats.iter().map(|e| e.latency).collect::<Vec<i64>>();
   let latencies_by_ordertype = get_latency_by_ordertype(&engine_stats, &qvals);
   let latencies_by_avl_trades = get_latency_by_avl_trades(&engine_stats);
