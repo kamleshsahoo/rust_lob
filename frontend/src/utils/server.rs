@@ -10,10 +10,11 @@ use super::file_handler::{FileUploadOrderType, FinalStats};
 #[serde(tag = "type")]
 pub enum WsRequest {
   Start { 
-    total_objects: usize,  // Optional, defaults to 10
-    mean_price: f64,  // Optional, defaults to 300.0
-    sd_price: f64,  // Optional, defaults to 50.0
-    best_price_levels: bool // whether to show best bids and asks, defaults to false
+    total_objects: usize,  //defaults to 50_000
+    mean_price: f64,  //defaults to 250.0
+    sd_price: f64,  // defaults to 20.0
+    order_probs: Vec<f32>, //probs for [ADD, CANCEL, MODIFY] defaults to [0.0, 0.4 ,0.6] 
+    best_price_levels: bool // defaults to false
   },
   Stop,
   Ack
@@ -39,7 +40,6 @@ pub struct HealthCheckResponse {
 pub enum WsResponse {
     PriceLevels { snapshot: bool, bids: Vec<(Decimal, u64)>, asks: Vec<(Decimal, u64)> },
     Trades (Vec<ExecutedOrders>),
-    // EngineStats(Vec<EngineStats>)
     ExecutionStats (EngineStats),
     BestLevels {best_buy: Option<Decimal>, best_sell: Option<Decimal>},
     Completed,
