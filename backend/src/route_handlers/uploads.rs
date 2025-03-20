@@ -133,11 +133,19 @@ pub async fn large_upload_handler (
     // get complete file data
     let complete_data = state.get_all_chunks(&session_id).await.map_err(|e| AppError::InternalError(e))?;
 
-    // TODO: return error if no valid orders
     let (parsed_orders, duration, raw_cnt, invalid_cnt) = parse_file_orders(&complete_data);
-
-    // now we check for ratelimits with actual orders
     let total_orders = parsed_orders.len();
+    // return early if no valid orders were found
+    if total_orders == 0 {
+      return Ok(Json(
+        LargeUploadResponse {
+          orderbook_results: None,
+          parse_results: Some((duration, raw_cnt, invalid_cnt)),
+          processed: true
+        }
+      ));
+    }
+    // now we check for ratelimits with actual orders
     rate_limiter.would_exceed_limit(&remote_ip, &total_orders).await?;
     // log in db
     postgres.record_in_db(&remote_ip, &origin, &user_agent, total_orders, false);
