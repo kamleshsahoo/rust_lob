@@ -1,7 +1,9 @@
 #![allow(non_snake_case)]
-use std::collections::{BTreeMap, HashMap};
-use charming::{component::{Axis, Axis3D, Grid, Grid3D, Title}, element::{AxisLabel, AxisType, Color, ColorBy, LineStyle, NameLocation, SplitLine, TextStyle, Tooltip}, series::{Bar, Bar3d}, theme::Theme, Chart, WasmRenderer};
+
+use std::{collections::{BTreeMap, HashMap}, time::Duration};
+use charming::{component::{Axis, Axis3D, Grid, Grid3D, Title}, element::{AxisLabel, AxisType, Color, ColorBy, FormatterFunction, LineStyle, NameLocation, SplitLine, TextStyle, Tooltip}, series::{Bar, Bar3d}, Chart, WasmRenderer};
 use dioxus::prelude::*;
+use js_sys::wasm_bindgen::JsValue;
 use crate::utils::enginestats::{bar3d_data, bin_data};
 use crate::pages::simulator::PlotPropsState;
 
@@ -12,7 +14,7 @@ static  CANVAS_ID_BAR3D: &str = "rt-latency-3d";
 #[component]
 pub fn HistPlotCharming(latency: ReadOnlySignal<Vec<i64>>) -> Element {
 
-  let renderer = use_signal(|| WasmRenderer::new_opt(None, Some(300)));
+  let renderer = use_signal(|| WasmRenderer::new_opt(None, Some(350)));
   let latency_lim = use_context::<PlotPropsState>().latency_cutoff;
   let freq_lim = use_context::<PlotPropsState>().frequency_cutoff;
 
@@ -21,44 +23,44 @@ pub fn HistPlotCharming(latency: ReadOnlySignal<Vec<i64>>) -> Element {
     let max_latency = latency_lim();
     let max_freq = freq_lim();
     let latency_bin_width: i64 = if max_latency < 20_000 { 250 } else { 500 };
-    //let x_labels = (0..max_latency).step_by(latency_bin_width as usize).collect::<Vec<i64>>();
     
     let binned_data = bin_data(&latency(), latency_bin_width, max_latency);
     //info!("binned data: {:?}", &binned_data);
     
     let chart = Chart::new()
-    //see if Tooltip,  legend, grid required
     .title(
       Title::new()
-      .text("Order Latency distribution")
-      // .subtext("Latency (in nanoseconds)")
+      .text("Order latency distribution")
       .text_style(
         TextStyle::new()
         .color("rgba(255, 255, 255, 1)")
-        // .padding_all(150)
-        .font_family("monospace")
-        .font_size(20)
+        .font_family("Arial")
+        .font_size(18)
       )
+      // top, right, bottom, left
+      .padding((12, 0, 5, 20))
     )
-    .background_color("rgba(41,52,65,1)") //rgba(91,92,110,1) rgba(0,0,0,0.3) rgba(64,64,64,0.5)
+    .background_color("rgba(41,52,65,1)")
     .color(vec![Color::Value("#72ccff".to_string())]) //rgba(255, 113, 94, 1)
     .tooltip(
       Tooltip::new()
-      
-      .formatter(r#"a:{a} b:{b} c:{c}"#)
-      // .formatter( Formatter::String("{a0}: {c1}".into()))
-      //.formatter(r#"{b0}<br />{a0}: {c1}"#)
-      //{a} for series name, {b} for category name, {c} for data value, {d} for none;
+      // params.value = [MeanOfV0V1, VCount, V0, V1, DisplayableName]
+      .formatter(FormatterFunction::new_with_args(
+        "params",
+        r#"
+        var vals = params.value;
+        return 'Latency : ' + vals[4] + '<br/>' + params.seriesName + ' : ' + vals[1];
+        "# 
+      ))
     )
     .grid(
       Grid::new()
       .show(false)
-      // .left("5%")
-      // .right("10%")
-      // .bottom("5%")
-      // .contain_label(true)
+      .contain_label(true)
+      .left("10%")
+      .bottom("14%")
+      .right("8%")
     )
-    
     .x_axis(
       Axis::new()
       .name("Latency (in nanoseconds)")
@@ -67,7 +69,7 @@ pub fn HistPlotCharming(latency: ReadOnlySignal<Vec<i64>>) -> Element {
       .name_text_style(
         TextStyle::new()
         .color("#ffffff")
-        .font_family("Courier New")
+        .font_family("Consolas")
         .font_size(14)
       )
       .scale(true)
@@ -80,18 +82,18 @@ pub fn HistPlotCharming(latency: ReadOnlySignal<Vec<i64>>) -> Element {
       )
       .axis_label(
         AxisLabel::new()
-        .color("#aaaaaa")
+        .color("#cccccc")
       )
     )
     .y_axis(
       Axis::new()
       .name("No. of orders")
       .name_location(NameLocation::Middle)
-      .name_gap(42.0)
+      .name_gap(50.0)
       .name_text_style(
         TextStyle::new()
         .color("#ffffff")
-        .font_family("Courier New")
+        .font_family("Consolas")
         .font_size(14)
       )
       .type_(AxisType::Value)
@@ -104,35 +106,19 @@ pub fn HistPlotCharming(latency: ReadOnlySignal<Vec<i64>>) -> Element {
       )
       .axis_label(
         AxisLabel::new()
-        .color("#aaaaaa")
+        .color("#cccccc")
       )
       .max(max_freq)
     )
     .series(
       Bar::new()
-      .name("Count:")
+      .name("Orders")
       .data(binned_data)
-      // .emphasis(
-      //   Emphasis::new()
-      //   .item_style(
-      //     ItemStyle::new()
-      //     .shadow_blur(10)
-      //     .shadow_color("rgba(105, 180, 224, 0.3)")
-      //   ))
-      // .show_background(true).background_style(BackgroundStyle::new().color("rgba(180, 180, 180, 0.2)"))
-      // .data(avg_lat)
     );
 
     let _z = renderer.read_unchecked().render(CANVAS_ID_HIST, &chart).expect("failed to create charming hist plot!");
-
   });
 
-  /*
-  window.addEventListener('resize', function() {{
-                  chart_hist.resize();
-  }});
-  */
-  
   rsx! {
     div {
       id: CANVAS_ID_HIST,
@@ -166,13 +152,11 @@ pub fn HistPlotCharming(latency: ReadOnlySignal<Vec<i64>>) -> Element {
 
 #[component]
 pub fn BarPlotCharming(latency_by_ordertype: ReadOnlySignal<HashMap<String, Vec<f64>>>) -> Element {
-  let renderer = use_signal(|| WasmRenderer::new_opt(None, Some(250)).theme(Theme::Halloween));
-  let latency_lim = use_context::<PlotPropsState>().latency_cutoff;
-  //let y_max = 1.05 * (latency_lim() as f64);
-  let y_max = latency_lim();
+  
+  let renderer = use_signal(|| WasmRenderer::new_opt(None, Some(300)));
+  let y_max = (use_context::<PlotPropsState>().avg_latency_cutoff)();
 
   use_effect(move || {
-      
     let x_labels = vec!["ADD", "MODIFY", "CANCEL"];
     let mut avg_lat: Vec<i64> = vec![];
 
@@ -182,59 +166,91 @@ pub fn BarPlotCharming(latency_by_ordertype: ReadOnlySignal<HashMap<String, Vec<
         // NOTE: last element is the mean. See enginestats.rs 
         let avg = *vec.last().expect("failed to get last element as mean latency by ordertype!");
         avg_lat.push(avg as i64);
+      } else {
+        avg_lat.push(0);
       }
     }
 
     let chart = Chart::new()
     .title(
       Title::new()
-      .text("Latency by Ordertype")
+      .text("Avg. latency by ordertype")
       .text_style(
         TextStyle::new()
         .color("rgba(255, 255, 255, 1)")
-        // .padding_all(150)
-        .font_family("monospace")
-        .font_size(20)
+        .font_family("Arial")
+        .font_size(18)
       )
+      // top, right, bottom, left
+      .padding((12, 0, 5, 20))
     )
     .background_color("rgba(41,52,65,1)")
     .color(vec![Color::Value("#fc97af".to_string()), Color::Value("#87f7cf".to_string()), Color::Value("#72ccff".to_string())])
     .tooltip(
       Tooltip::new()
-      .formatter("{a}: {c}ns")
+      .formatter("{a}: {c} ns")
     )
     .grid(
       Grid::new()
-      .left("10%")
+      .left("12%")
+      .top("23%")
+      .bottom("14%")
+      .right("6%")
       .contain_label(true)
     )
     .x_axis(
       Axis::new()
       .type_(AxisType::Category)
+      .name("Order type")
+      .name_location(NameLocation::Middle)
+      .name_gap(28.0)
+      .name_text_style(
+        TextStyle::new()
+        .color("#ffffff")
+        .font_family("Consolas")
+        .font_size(14)
+      )
       .data(x_labels)
+      .axis_label(
+        AxisLabel::new()
+        .color("#cccccc")
+      )
     )
     .y_axis(
       Axis::new()
       .type_(AxisType::Value)
+      .name("Latency (ns)")
+      .name_location(NameLocation::Middle)
+      .name_gap(60.0)
+      .name_text_style(
+        TextStyle::new()
+        .color("#ffffff")
+        .font_family("Consolas")
+        .font_size(14)
+      )
+      .split_line(
+        SplitLine::new()
+        .line_style(
+          LineStyle::new()
+          .color("#737373")
+        )
+      )
+      .axis_label(
+        AxisLabel::new()
+        .color("#cccccc")
+      )
       .max(y_max)
     )
     .series(
       Bar::new()
       .name("Avg latency")
-      // .show_background(true).background_style(BackgroundStyle::new().color("rgba(180, 180, 180, 0.2)"))
       .color_by(ColorBy::Data)
       .data(avg_lat)
     );
 
     renderer.read_unchecked().render(CANVAS_ID_BAR, &chart).expect("failed to create charming bar plot!");
-  
   });
 
-  /*
-  window.addEventListener('resize', function() {{
-                  chart_bar.resize();
-                }})
-  */
   rsx! {
     div {
       id: CANVAS_ID_BAR,
@@ -265,19 +281,17 @@ pub fn BarPlotCharming(latency_by_ordertype: ReadOnlySignal<HashMap<String, Vec<
 
 #[component]
 pub fn Plot3D(latency_by_avl_trade: ReadOnlySignal<BTreeMap<(i64, i64), f64>>) -> Element {
+
+  let mut echarts_instance: Signal<Option<charming::Echarts>> = use_signal(||None);
   
-  /*
-  window.addEventListener('resize', function() {{
-          chart_3d.resize();
-  }});
-  */
   let mount_code = format!(
     r#"
-      var millis = 200;
+      var millis = 150;
       setTimeout(function() {{
         const element_bar3d = document.getElementById("{CANVAS_ID_BAR3D}");
         if (!element_bar3d) {{console.log('no element_bar3d found');}}
-        var chart_3d = echarts.init(element_bar3d);
+        var chart_3d = echarts.init(element_bar3d, null, {{ width: null, height: 300 }});
+
         const resizeObserver = new ResizeObserver(entries => {{
           for (const entry of entries) {{
             if (entry.target === element_bar3d) {{
@@ -289,29 +303,42 @@ pub fn Plot3D(latency_by_avl_trade: ReadOnlySignal<BTreeMap<(i64, i64), f64>>) -
 
         chart_3d.setOption({{ 
           title : {{
-            text: "Latency by no. of trades\nand AVL rebalances",
+            text: "Avg. latency by trades and AVL rebalances",
             textStyle: {{ 
               color: 'rgba(255, 255, 255, 1)',
-              fontFamily: 'monospace',
-              fontSize: 20
-            }}
+              fontFamily: 'Arial',
+              fontSize: 18
+            }},
+            padding: [12, 5, 6, 13]
           }},
           backgroundColor: 'rgba(41,52,65,1)',
           color: ['#F9713C'],
           animationDuration: 0,
           animationDurationUpdate: 300,
-          tooltip: {{ }},
+          tooltip: {{
+            formatter: function (params) {{
+              var data = params.data;
+              return '- Latency: ' + data[2] + ' ns'+ '<br/>' + '- Trades: '+ data[0] + '<br/>' + '- Rebalances: ' + data[1]; 
+            }}
+          }},
           grid3D: {{
+            boxDepth: 130,
+            viewControl: {{
+              beta: 15,
+              distance: 250,
+              maxDistance: 450
+            }},
             axisLine: {{
               lineStyle: {{
-                color: '#262626'
-              }}
+                color: '#262626',
+                width: 1.4
+              }},
             }},
-            splitLine: {{
-              lineStyle: {{
-                color: '#a6a6a6',
-                width: 1
-              }}
+            splitLine : {{
+              lineStyle: {{ color: '#737373' }}
+            }},
+            axisPointer: {{
+              lineStyle: {{ color: '#d9d9d9' }}
             }},
             light: {{
               main: {{
@@ -326,31 +353,31 @@ pub fn Plot3D(latency_by_avl_trade: ReadOnlySignal<BTreeMap<(i64, i64), f64>>) -
             data: [0, 1, 2, 3, 4, 5, 6, 7],
             nameTextStyle: {{
               color: '#ffffff',
-              fontFamily: 'Courier New',
+              fontFamily: 'Consolas',
               fontSize: 14
             }},
             nameGap: 25,
             axisLabel: {{
               interval: 0,
               textStyle: {{
-                color: '#b3b3b3'
+                color: '#cccccc'
               }}
             }},
           }},
           yAxis3D: {{
             name: "AVL rebalances",
             type: "category",
-            data: [0, 1, 2, 3, 4, 5, 6, 7],
+            data: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             nameTextStyle: {{
               color: '#ffffff',
-              fontFamily: 'Courier New',
+              fontFamily: 'Consolas',
               fontSize: 14
             }},
             nameGap: 25,
             axisLabel: {{
-              interval: 0,
+              interval: 1,
               textStyle: {{
-                color: '#b3b3b3'
+                color: '#cccccc'
               }}
             }},
           }},
@@ -359,29 +386,27 @@ pub fn Plot3D(latency_by_avl_trade: ReadOnlySignal<BTreeMap<(i64, i64), f64>>) -
             name: "Latency",
             nameTextStyle: {{
               color: '#ffffff',
-              fontFamily: 'Courier New',
+              fontFamily: 'Consolas',
               fontSize: 14
             }},
             nameGap: 40,
             axisLabel: {{
               textStyle: {{
-                color: '#b3b3b3'
+                color: '#cccccc'
               }}
             }},
-            max: 50000
+            max: 100000
           }}
         }});
+        window.rtChart3dInstance = chart_3d;
       }}, millis);
     "#
   );
-
-  let renderer = use_signal(|| WasmRenderer::new_opt(None, Some(250)));
 
   use_effect(move || {
     let data = bar3d_data(&latency_by_avl_trade());
     let chart = Chart::new()
                     .grid3d(Grid3D::new())
-                    // .tooltip(Tooltip::new())
                     .x_axis3d(
                       Axis3D::new()
                       .type_(AxisType::Category)
@@ -395,19 +420,31 @@ pub fn Plot3D(latency_by_avl_trade: ReadOnlySignal<BTreeMap<(i64, i64), f64>>) -
                     )
                     .series(
                       Bar3d::new()
-                      .name("Latency")
+                      // .name("Latency")
                       .shading("lambert")
                       .data(data)
                     );
-
-    renderer.read_unchecked().render("rt-latency-3d", &chart).expect("failed to create charming bar plot!");
-
+    
+    if let Some(echarts) = echarts_instance.read_unchecked().as_ref() {
+      //info!("updating rt 3d");
+      WasmRenderer::update(echarts, &chart);
+    }
   });
 
   rsx! {
     div { 
       id: CANVAS_ID_BAR3D,
-      onmounted: move |_evt| {document::eval(&mount_code);}
+      onmounted: move |_evt| {
+        let value = mount_code.clone();
+        async move { 
+          document::eval(&value[..]);
+          async_std::task::sleep(Duration::from_millis(190)).await;
+          let target = web_sys::window().expect("global window should exist!");
+          let instance = target.get("rtChart3dInstance").expect("failed to get rt 3d chart instance");
+          let js_instance = Into::<JsValue>::into(instance);
+          echarts_instance.set(Some(js_instance.into()));
+        }
+      }
     }
   }
 }
