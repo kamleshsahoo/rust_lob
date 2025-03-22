@@ -532,7 +532,7 @@ pub fn BackDocs() -> Element {
         p {
           "GCP calls these provisionable " em {"laptops"}", compute engines and we specifically used GCP Cloud Run. Cloud Run eliminates the hassle of managing compute resources as user numbers fluctuate. This "scaling" automatically adjusts resources based on usage—similar to needing more RAM when playing the latest " i{"Elden Ring"} " title."
         }
-        h3 { "Dockerizing the Serve" }
+        h3 { "Dockerizing the Server" }
         p { "To deploy our Axum server, we packaged it into a Docker container. Thanks to Rust’s minimal runtime dependencies, the resulting image was a mere 85MB—a far cry from the bloated 500MB+ images I’ve dealt with in the past. Rust compiles down to a single binary, meaning no runtime dependencies or bulky OS libraries. Just a lean, mean, serving machine." }
       }
       section { 
