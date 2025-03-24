@@ -1,0 +1,8 @@
+ADD, 1, Ask, 50, 100.2
+ADD, 2, Ask, 50, 120.15
+ADD, 3, Ask, 50, 121.05
+ADD, 4, Ask, 50, 80.56
+ADD, 5, Ask, 50, 85
+ADD, 6, Bid, 50, 75.12
+MODIFY, 2, 50, 75
+CANCEL, 5
