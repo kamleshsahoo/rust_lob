@@ -451,7 +451,7 @@ summary {
 }
 
 .upload-text {
-  margin-bottom: 1rem;
+  margin-bottom: 0.25rem;
 }
 
 .file-info {
@@ -466,6 +466,10 @@ summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+#browse-button {
+  margin-top: 0.5rem;
 }
 
 #browse-button, #file-upload-btn {
@@ -491,6 +495,93 @@ summary {
   color: #e57373;
   border-radius: 4px;
   text-align: center;
+}
+
+/*Sample file download styles*/
+.sample-file-container {
+  display: flex;
+  justify-content: center;
+  padding: 0 1.5rem;
+}
+
+.sample-file-section {
+  padding: 1rem 1.25rem 0.75rem;
+  background-color: #1e1e1e;
+  max-width: 600px;
+  width: 100%;
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  border-radius: 8px;
+}
+
+.sample-file-header {
+  margin-bottom: 0.75rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.sample-file-desc {
+  font-size: 0.9rem;
+  color: #b0b0b0;
+  margin-bottom: 0.5rem;
+}
+
+.sample-files {
+  display: flex;
+  gap: 4px;
+  justify-content: space-evenly;
+}
+
+.sample-file-card {
+  border-radius: 8px;
+  border: 1px solid #333;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  min-width: 200px;
+  transition: all 0.2s ease;
+}
+
+.sample-file-card:hover {
+  background-color: var(--bg-primary);
+}
+
+.sample-file-icon {
+  color: #954ce9;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.sample-file-info {
+  flex-grow: 1;
+}
+
+.sample-file-name {
+  font-weight: 500;
+  font-size: 15px;
+  margin-bottom: 2px;
+}
+
+.sample-file-details {
+  font-size: 12px;
+  color: #a0a0a0;
+}
+
+.sample-file-download-icon {
+  color: white;
+  margin-left: 12px;
+  transition: all 0.2s ease;
+}
+
+.sample-file-download-icon:hover {
+  color: #954ce9;
+  transform: translateY(1px);
+}
+
+@media (max-width: 600px) {
+  .sample-files {
+    flex-direction: column;
+    gap: 8px
+  }
 }
 
 .toast {
