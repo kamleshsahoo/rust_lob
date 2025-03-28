@@ -175,8 +175,6 @@
 .sim-accordion {
   margin: 2rem 0;
   line-height: 1.6;
-  /* border-top: 1px solid #44403c;
-  border-bottom: 1px solid #44403c; */
 }
 
 .sim-accordion pre {
@@ -421,7 +419,6 @@ summary {
 }
 
 .upload-subtitle {
-  /*#7289da*/
  color: #b3b3b3;
  margin-bottom: 1rem;
 }
@@ -709,7 +706,6 @@ summary {
   min-width: 0;
   width: 100%;
   overflow: hidden;
-  /* height: 0; */
   box-shadow: 0 2px 4px rgba(92, 228, 51, 0.1);
 
   h2 {
@@ -722,88 +718,16 @@ summary {
   grid-column: 1/-1;
 }
 
-/* canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-} */
-
-/* #st-latency-hist {
-  height: 300px;
-} */
-
-/* #rt-latency-hist {
-  height: 300px;
-}
-
-#rt-latency-bar {
-  height: 250px;
-}
-
-#rt-latency-3d {
-  height: 250px;
-} */
-
 @media (max-width: 568px) {
   .chart-container {
     grid-template-columns: 1fr;
     /* padding: 10px; */
   }
 
-  /* #rt-latency-hist {
-    height: 250px;
-  }
-
-  #rt-latency-bar {
-    height: 200px;
-  } */
-
   .wide-chart {
     grid-column: 1;
   }
 }
-
-/* @media only screen and (min-width: 1200px) {
-  #rt-latency-hist {
-    height: 350px;
-  }
-  #rt-latency-bar {
-    height: 300px;
-  }
-} */
-
-/* @media only screen and (min-width: 2000px) {
-  #rt-latency-hist {
-    height: 400px;
-  }
-
-  #rt-latency-bar {
-    height: 350px;
-  }
-
-  h2 {
-    font-size: large;
-  }
-} */
-
-/* @media screen and (min-width: 800px) {
-  .chart-container {
-    grid-template-columns: repeat(2, 1fr);
-    grid-template-areas:
-      "top top"
-      "bottom-left bottom-right";
-  }
-
-  .chart-card:nth-child(1) {
-    grid-area: top;
-  }
-  .chart-card:nth-child(2) {
-    grid-area: bottom-left;
-  }
-  .chart-card:nth-child(3) {
-    grid-area: bottom-right;
-  }
-} */
 
 .table-container {
   display: grid;
@@ -1156,19 +1080,6 @@ caption {
     padding: 2px;
   }
 }
-
-/* .orderbook-spread {
-  color: #98a6af;
-  background-color: #121723;
-  width: 50%;
-  text-align: center;
-  padding: 0.7em 0;
-
-  @media only screen and (min-width: 800px) {
-    position: absolute;
-    top: 5px;
-  }
-} */
 
 .orderbook-pricerow {
   display: flex;
